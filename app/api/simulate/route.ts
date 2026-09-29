@@ -33,6 +33,12 @@ type Character = {
   currentPriority: string;
 
   relationships: Relationship[];
+
+  /*
+   * Memory prevents characters from choosing
+   * the exact same action forever.
+   */
+  recentActions: ActionType[];
 };
 
 type Location = {
@@ -66,6 +72,15 @@ type Action = {
   description: string;
 };
 
+type ActionResult = {
+  event: string;
+  action: string;
+  reason: string;
+  knowledge: string;
+  emotionalChange: string;
+  priority: string;
+};
+
 /* =========================================================
    INITIAL WORLD
 ========================================================= */
@@ -85,10 +100,7 @@ function createInitialWorld(): WorldState {
         name: "University of Lagos Campus",
         description:
           "The main university grounds where students move between classes and social spaces.",
-        connectedTo: [
-          "campus-cafe",
-          "company-office"
-        ]
+        connectedTo: ["campus-cafe", "company-office"]
       },
 
       {
@@ -96,10 +108,7 @@ function createInitialWorld(): WorldState {
         name: "Campus Café",
         description:
           "A busy café where students meet, talk and study.",
-        connectedTo: [
-          "campus",
-          "company-office"
-        ]
+        connectedTo: ["campus", "company-office"]
       },
 
       {
@@ -107,10 +116,7 @@ function createInitialWorld(): WorldState {
         name: "Company Liaison Office",
         description:
           "A small private office where company representatives meet selected students.",
-        connectedTo: [
-          "campus",
-          "campus-cafe"
-        ]
+        connectedTo: ["campus", "campus-cafe"]
       }
     ],
 
@@ -162,7 +168,9 @@ function createInitialWorld(): WorldState {
             trust: 45,
             suspicion: 55
           }
-        ]
+        ],
+
+        recentActions: []
       },
 
       {
@@ -212,7 +220,9 @@ function createInitialWorld(): WorldState {
             trust: 60,
             suspicion: 40
           }
-        ]
+        ],
+
+        recentActions: []
       }
     ],
 
@@ -252,6 +262,14 @@ function normalizeCharacter(
     Array.isArray(value.relationships)
       ? value.relationships
       : fallback.relationships;
+
+  const recentActions =
+    Array.isArray(value.recentActions)
+      ? value.recentActions.filter(
+          (action): action is ActionType =>
+            typeof action === "string"
+        )
+      : fallback.recentActions;
 
   return {
     id:
@@ -330,7 +348,9 @@ function normalizeCharacter(
           typeof relationship?.suspicion === "number"
             ? relationship.suspicion
             : 50
-      }))
+      })),
+
+    recentActions: recentActions.slice(-4)
   };
 }
 
@@ -479,8 +499,27 @@ function canMove(
   );
 }
 
+function rememberAction(
+  character: Character,
+  action: ActionType
+) {
+  character.recentActions = [
+    ...(character.recentActions || []),
+    action
+  ].slice(-4);
+}
+
+function recentlyDid(
+  character: Character,
+  action: ActionType
+): boolean {
+  return (character.recentActions || [])
+    .slice(-2)
+    .includes(action);
+}
+
 /* =========================================================
-   LEGAL ACTION GENERATION
+   LEGAL ACTIONS
 ========================================================= */
 
 function generateLegalActions(
@@ -503,9 +542,6 @@ function generateLegalActions(
       `${actor.name} observes the current surroundings.`
   });
 
-  /*
-   * Investigation requires the actual capability.
-   */
   if (
     hasCapability(
       actor,
@@ -518,17 +554,7 @@ function generateLegalActions(
       description:
         `${actor.name} investigates for evidence.`
     });
-  }
 
-  /*
-   * Search is also available to investigators.
-   */
-  if (
-    hasCapability(
-      actor,
-      "investigation"
-    )
-  ) {
     actions.push({
       type: "SEARCH",
       actorId: actor.id,
@@ -537,9 +563,6 @@ function generateLegalActions(
     });
   }
 
-  /*
-   * Nearby characters.
-   */
   const nearby =
     world.characters.filter(
       character =>
@@ -565,9 +588,6 @@ function generateLegalActions(
     });
   }
 
-  /*
-   * Movement is limited to connected locations.
-   */
   const current =
     getLocation(
       world,
@@ -614,87 +634,290 @@ function chooseAction(
     );
   }
 
-  /*
-   * Zara prioritizes investigation while she
-   * still lacks enough evidence.
-   */
-  if (
-    actor.id === "zara" &&
-    actor.currentPriority
-      .toLowerCase()
-      .includes("evidence")
-  ) {
-    const investigation =
-      legalActions.find(
-        action =>
-          action.type === "INVESTIGATE"
+  const lastAction =
+    actor.recentActions[
+      actor.recentActions.length - 1
+    ];
+
+  function findAction(
+    type: ActionType,
+    targetId?: string
+  ): Action | undefined {
+    return legalActions.find(action => {
+      if (action.type !== type) {
+        return false;
+      }
+
+      if (
+        targetId &&
+        action.targetId !== targetId
+      ) {
+        return false;
+      }
+
+      return true;
+    });
+  }
+
+  function chooseDifferent(
+    types: ActionType[]
+  ): Action | undefined {
+    for (const type of types) {
+      const action = findAction(type);
+
+      if (
+        action &&
+        type !== lastAction
+      ) {
+        return action;
+      }
+    }
+
+    return undefined;
+  }
+
+  /* =======================================================
+     ZARA
+  ======================================================= */
+
+  if (actor.id === "zara") {
+    const daniel =
+      world.characters.find(
+        character =>
+          character.id === "daniel"
       );
 
-    if (investigation) {
-      return investigation;
+    const relationship =
+      daniel
+        ? getRelationship(
+            actor,
+            "daniel"
+          )
+        : undefined;
+
+    /*
+     * First objective:
+     * get actual evidence.
+     */
+    if (
+      world.evidence.length === 0 &&
+      !recentlyDid(
+        actor,
+        "INVESTIGATE"
+      )
+    ) {
+      const investigate =
+        findAction(
+          "INVESTIGATE"
+        );
+
+      if (investigate) {
+        return investigate;
+      }
+    }
+
+    /*
+     * Once evidence exists, Zara's behavior
+     * becomes more investigative and interpersonal.
+     */
+    if (
+      world.evidence.length > 0 &&
+      relationship
+    ) {
+      /*
+       * High suspicion + Daniel nearby:
+       * follow him.
+       */
+      if (
+        relationship.suspicion >= 60
+      ) {
+        const follow =
+          findAction(
+            "FOLLOW",
+            "daniel"
+          );
+
+        if (
+          follow &&
+          !recentlyDid(
+            actor,
+            "FOLLOW"
+          )
+        ) {
+          return follow;
+        }
+      }
+
+      /*
+       * After following, don't endlessly follow.
+       * Search for information instead.
+       */
+      if (
+        lastAction === "FOLLOW"
+      ) {
+        const search =
+          chooseDifferent([
+            "SEARCH",
+            "INVESTIGATE",
+            "OBSERVE",
+            "MOVE"
+          ]);
+
+        if (search) {
+          return search;
+        }
+      }
+
+      /*
+       * Search gives Zara new local knowledge.
+       */
+      const search =
+        chooseDifferent([
+          "SEARCH"
+        ]);
+
+      if (search) {
+        return search;
+      }
+
+      /*
+       * If Daniel is nearby, sometimes talk.
+       */
+      if (
+        relationship.suspicion < 75
+      ) {
+        const talk =
+          chooseDifferent([
+            "TALK"
+          ]);
+
+        if (talk) {
+          talk.targetId = "daniel";
+          return talk;
+        }
+      }
+    }
+
+    /*
+     * Zara can relocate when the current
+     * location stops producing useful information.
+     */
+    const move =
+      chooseDifferent([
+        "MOVE",
+        "OBSERVE",
+        "WAIT"
+      ]);
+
+    if (move) {
+      return move;
     }
   }
 
-  /*
-   * If Zara has already investigated, she becomes
-   * more interested in Daniel.
-   */
-  if (
-    actor.id === "zara" &&
-    world.evidence.length > 0
-  ) {
-    const follow =
-      legalActions.find(
-        action =>
-          action.type === "FOLLOW" &&
-          action.targetId === "daniel"
-      );
+  /* =======================================================
+     DANIEL
+  ======================================================= */
 
-    if (follow) {
-      return follow;
-    }
-  }
-
-  /*
-   * Daniel tends to talk to Zara because he is
-   * trying to protect her without revealing everything.
-   */
   if (actor.id === "daniel") {
-    const talk =
-      legalActions.find(
-        action =>
-          action.type === "TALK" &&
-          action.targetId === "zara"
+    const zara =
+      world.characters.find(
+        character =>
+          character.id === "zara"
       );
 
-    if (talk) {
+    const relationship =
+      zara
+        ? getRelationship(
+            actor,
+            "zara"
+          )
+        : undefined;
+
+    /*
+     * If Daniel suspects Zara strongly,
+     * he starts creating distance.
+     */
+    if (
+      relationship &&
+      relationship.suspicion >= 55
+    ) {
+      const move =
+        chooseDifferent([
+          "MOVE",
+          "OBSERVE",
+          "WAIT"
+        ]);
+
+      if (move) {
+        return move;
+      }
+    }
+
+    /*
+     * Daniel should not repeat TALK every day.
+     */
+    if (
+      lastAction === "TALK"
+    ) {
+      const move =
+        chooseDifferent([
+          "MOVE",
+          "OBSERVE",
+          "WAIT"
+        ]);
+
+      if (move) {
+        return move;
+      }
+    }
+
+    /*
+     * Normally Daniel tries to manage Zara
+     * while keeping his secret.
+     */
+    const talk =
+      findAction(
+        "TALK",
+        "zara"
+      );
+
+    if (
+      talk &&
+      !recentlyDid(
+        actor,
+        "TALK"
+      )
+    ) {
       return talk;
     }
+
+    const alternative =
+      chooseDifferent([
+        "MOVE",
+        "OBSERVE",
+        "WAIT"
+      ]);
+
+    if (alternative) {
+      return alternative;
+    }
   }
 
   /*
-   * Otherwise investigate if possible.
+   * Generic fallback.
+   * Never repeat the previous action if
+   * another legal action exists.
    */
-  const investigation =
+  const nonRepeating =
     legalActions.find(
       action =>
-        action.type === "INVESTIGATE"
+        action.type !== lastAction
     );
 
-  if (investigation) {
-    return investigation;
-  }
-
-  /*
-   * Otherwise observe.
-   */
-  const observe =
-    legalActions.find(
-      action =>
-        action.type === "OBSERVE"
-    );
-
-  return observe || legalActions[0];
+  return (
+    nonRepeating ||
+    legalActions[0]
+  );
 }
 
 /* =========================================================
@@ -704,7 +927,7 @@ function chooseAction(
 function executeAction(
   action: Action,
   world: WorldState
-) {
+): ActionResult {
   const actor =
     world.characters.find(
       character =>
@@ -721,14 +944,15 @@ function executeAction(
     action.targetId
       ? world.characters.find(
           character =>
-            character.id === action.targetId
+            character.id ===
+            action.targetId
         )
       : undefined;
 
   switch (action.type) {
-    /* -----------------------------------------------
+    /* =====================================================
        WAIT
-    ----------------------------------------------- */
+    ===================================================== */
 
     case "WAIT":
       return {
@@ -741,8 +965,7 @@ function executeAction(
         reason:
           `${actor.name} believes immediate action could create unnecessary risk.`,
 
-        knowledge:
-          "",
+        knowledge: "",
 
         emotionalChange:
           "Remains cautious.",
@@ -751,9 +974,9 @@ function executeAction(
           actor.currentPriority
       };
 
-    /* -----------------------------------------------
+    /* =====================================================
        OBSERVE
-    ----------------------------------------------- */
+    ===================================================== */
 
     case "OBSERVE":
       return {
@@ -766,8 +989,7 @@ function executeAction(
         reason:
           `${actor.name} wants more information before committing to an action.`,
 
-        knowledge:
-          "",
+        knowledge: "",
 
         emotionalChange:
           "Becomes slightly more alert.",
@@ -776,9 +998,9 @@ function executeAction(
           actor.currentPriority
       };
 
-    /* -----------------------------------------------
+    /* =====================================================
        MOVE
-    ----------------------------------------------- */
+    ===================================================== */
 
     case "MOVE": {
       if (!action.destinationId) {
@@ -804,8 +1026,7 @@ function executeAction(
           reason:
             "The destination is not directly accessible from the current location.",
 
-          knowledge:
-            "",
+          knowledge: "",
 
           emotionalChange:
             "Becomes slightly frustrated.",
@@ -830,6 +1051,22 @@ function executeAction(
       actor.location =
         destination.id;
 
+      /*
+       * Moving toward the company office
+       * increases risk for Daniel.
+       */
+      if (
+        actor.id === "daniel" &&
+        destination.id ===
+          "company-office"
+      ) {
+        actor.currentPriority =
+          "Maintain contact with the company without exposing his secret";
+
+        actor.emotionalState =
+          "More anxious but focused";
+      }
+
       return {
         event:
           `${actor.name} moves to ${destination.name}.`,
@@ -840,8 +1077,7 @@ function executeAction(
         reason:
           `${actor.name} decides the new location may help with their current priority.`,
 
-        knowledge:
-          "",
+        knowledge: "",
 
         emotionalChange:
           "More alert to the new surroundings.",
@@ -851,9 +1087,9 @@ function executeAction(
       };
     }
 
-    /* -----------------------------------------------
+    /* =====================================================
        TALK
-    ----------------------------------------------- */
+    ===================================================== */
 
     case "TALK": {
       if (!target) {
@@ -876,8 +1112,7 @@ function executeAction(
           reason:
             "The target is not at the same location.",
 
-          knowledge:
-            "",
+          knowledge: "",
 
           emotionalChange:
             "Becomes slightly frustrated.",
@@ -893,6 +1128,9 @@ function executeAction(
           target.id
         );
 
+      /*
+       * Talking changes the relationship.
+       */
       relationship.suspicion =
         Math.min(
           100,
@@ -900,7 +1138,7 @@ function executeAction(
         );
 
       /*
-       * Daniel does not reveal his secret.
+       * Daniel protects his secret.
        */
       if (
         actor.id === "daniel" &&
@@ -921,6 +1159,37 @@ function executeAction(
 
           emotionalChange:
             "More conflicted.",
+
+          priority:
+            actor.currentPriority
+        };
+      }
+
+      /*
+       * Zara notices Daniel's unusual behavior.
+       */
+      if (
+        actor.id === "zara" &&
+        target.id === "daniel"
+      ) {
+        actor.currentPriority =
+          "Determine whether Daniel is hiding something";
+
+        return {
+          event:
+            "Zara talks with Daniel and notices that he is unusually careful.",
+
+          action:
+            "Zara talks to Daniel and studies his behavior.",
+
+          reason:
+            "Zara wants to understand whether Daniel is connected to the company.",
+
+          knowledge:
+            "Daniel appears to be withholding information.",
+
+          emotionalChange:
+            "More suspicious.",
 
           priority:
             actor.currentPriority
@@ -948,9 +1217,9 @@ function executeAction(
       };
     }
 
-    /* -----------------------------------------------
+    /* =====================================================
        FOLLOW
-    ----------------------------------------------- */
+    ===================================================== */
 
     case "FOLLOW": {
       if (!target) {
@@ -973,8 +1242,7 @@ function executeAction(
           reason:
             "The target is no longer nearby.",
 
-          knowledge:
-            "",
+          knowledge: "",
 
           emotionalChange:
             "Becomes frustrated.",
@@ -1017,9 +1285,9 @@ function executeAction(
       };
     }
 
-    /* -----------------------------------------------
+    /* =====================================================
        INVESTIGATE
-    ----------------------------------------------- */
+    ===================================================== */
 
     case "INVESTIGATE": {
       if (
@@ -1038,8 +1306,7 @@ function executeAction(
           reason:
             "The character does not have the required capability.",
 
-          knowledge:
-            "",
+          knowledge: "",
 
           emotionalChange:
             "Slightly frustrated.",
@@ -1049,10 +1316,6 @@ function executeAction(
         };
       }
 
-      /*
-       * Deterministic consequence:
-       * Zara discovers evidence the first time.
-       */
       const newEvidence =
         "The company is deliberately approaching students privately.";
 
@@ -1102,6 +1365,10 @@ function executeAction(
         };
       }
 
+      /*
+       * Repeated investigation should not
+       * magically create infinite evidence.
+       */
       return {
         event:
           `${actor.name} investigates again but finds no new evidence.`,
@@ -1112,8 +1379,7 @@ function executeAction(
         reason:
           "The available evidence has not changed.",
 
-        knowledge:
-          "",
+        knowledge: "",
 
         emotionalChange:
           "Becomes slightly impatient.",
@@ -1123,9 +1389,9 @@ function executeAction(
       };
     }
 
-    /* -----------------------------------------------
+    /* =====================================================
        SEARCH
-    ----------------------------------------------- */
+    ===================================================== */
 
     case "SEARCH": {
       if (
@@ -1144,8 +1410,7 @@ function executeAction(
           reason:
             "The character lacks the expertise needed to identify useful evidence.",
 
-          knowledge:
-            "",
+          knowledge: "",
 
           emotionalChange:
             "Uncertain.",
@@ -1156,7 +1421,7 @@ function executeAction(
       }
 
       const discovery =
-        `Something about the ${actor.location} suggests the company has been using the area to meet students.`;
+        `Something about the current location suggests the company has been using the area to meet students.`;
 
       if (
         !actor.knowledge.includes(
@@ -1167,6 +1432,9 @@ function executeAction(
           discovery
         );
       }
+
+      actor.currentPriority =
+        "Determine why the company is recruiting students";
 
       return {
         event:
@@ -1189,6 +1457,80 @@ function executeAction(
       };
     }
   }
+}
+
+/* =========================================================
+   INTERVENTION
+========================================================= */
+
+function applyIntervention(
+  world: WorldState,
+  intervention: string
+): string {
+  const text =
+    intervention.toLowerCase();
+
+  /*
+   * Intervention is an event, not a cheat code.
+   * It can influence priorities but characters
+   * still have to choose a legal action.
+   */
+
+  if (
+    text.includes("zara") &&
+    text.includes("follow")
+  ) {
+    const zara =
+      world.characters.find(
+        character =>
+          character.id === "zara"
+      );
+
+    if (zara) {
+      zara.currentPriority =
+        "Track Daniel and discover where he goes";
+
+      return "Zara's attention shifts toward tracking Daniel.";
+    }
+  }
+
+  if (
+    text.includes("zara") &&
+    text.includes("investigate")
+  ) {
+    const zara =
+      world.characters.find(
+        character =>
+          character.id === "zara"
+      );
+
+    if (zara) {
+      zara.currentPriority =
+        "Investigate the company's activities";
+
+      return "Zara's priority shifts toward investigating the company.";
+    }
+  }
+
+  if (
+    text.includes("daniel") &&
+    text.includes("company")
+  ) {
+    const daniel =
+      world.characters.find(
+        character =>
+          character.id === "daniel"
+      );
+
+    if (daniel) {
+      daniel.currentPriority =
+        "Protect his relationship with the company";
+
+      return "Daniel becomes more focused on protecting his connection to the company.";
+    }
+  }
+
+  return "The intervention becomes part of the world's events, but its exact consequences remain uncertain.";
 }
 
 /* =========================================================
@@ -1229,20 +1571,33 @@ export async function POST(
       new_priority: string;
     }[] = [];
 
+    let interventionEffect = "";
+
     /*
-     * User intervention enters the simulation
-     * as an event. It does not automatically
-     * determine what characters do.
+     * User intervention enters the world first.
      */
     if (intervention) {
       dayEvents.push(
         `The user intervenes in the world: ${intervention}`
       );
+
+      interventionEffect =
+        applyIntervention(
+          world,
+          intervention
+        );
+
+      dayEvents.push(
+        interventionEffect
+      );
     }
 
     /*
-     * Each character independently chooses
-     * one legal action.
+     * Characters act independently.
+     *
+     * Important:
+     * each character sees the world after
+     * previous characters' consequences.
      */
     for (
       const character of world.characters
@@ -1265,6 +1620,11 @@ export async function POST(
           chosenAction,
           world
         );
+
+      rememberAction(
+        character,
+        chosenAction.type
+      );
 
       dayEvents.push(
         result.event
@@ -1295,22 +1655,26 @@ export async function POST(
     }
 
     /*
-     * Persist everything.
+     * Persist timeline.
      */
     world.events = [
       ...world.events,
       ...dayEvents
     ];
 
+    /*
+     * Current situation reflects the
+     * actual events rather than generic text.
+     */
     world.situation =
       dayEvents.length > 0
         ? dayEvents.join(" ")
         : "The day passes without a major development.";
 
-    /*
-     * Calculate a tension that actually
-     * reflects the current state.
-     */
+    /* =====================================================
+       RELATIONSHIP / TENSION
+    ===================================================== */
+
     const zara =
       world.characters.find(
         character =>
@@ -1327,20 +1691,64 @@ export async function POST(
       "The characters continue pursuing their own goals.";
 
     if (
-      world.evidence.length > 0 &&
       zara &&
       daniel
     ) {
-      const relationship =
+      const zaraRelationship =
         getRelationship(
           zara,
           "daniel"
         );
 
-      nextTension =
-        `Zara has evidence about the company, while her suspicion of Daniel is ${Math.round(
-          relationship.suspicion
-        )}%. Daniel still has information he has not revealed.`;
+      const danielRelationship =
+        getRelationship(
+          daniel,
+          "zara"
+        );
+
+      /*
+       * Suspicion gradually affects trust.
+       */
+      if (
+        zaraRelationship.suspicion >= 60
+      ) {
+        zaraRelationship.trust =
+          Math.max(
+            0,
+            zaraRelationship.trust - 5
+          );
+      }
+
+      if (
+        danielRelationship.suspicion >= 55
+      ) {
+        danielRelationship.trust =
+          Math.max(
+            0,
+            danielRelationship.trust - 5
+          );
+      }
+
+      if (
+        world.evidence.length > 0
+      ) {
+        nextTension =
+          `Zara has ${world.evidence.length} piece${
+            world.evidence.length === 1
+              ? ""
+              : "s"
+          } of evidence about the company. Her suspicion of Daniel is ${Math.round(
+            zaraRelationship.suspicion
+          )}%, while Daniel is keeping information from her.`;
+      }
+
+      if (
+        zara.location !==
+        daniel.location
+      ) {
+        nextTension +=
+          ` Zara and Daniel are now in different locations.`;
+      }
     }
 
     return NextResponse.json(
@@ -1366,7 +1774,17 @@ export async function POST(
             world.situation,
 
           next_tension:
-            nextTension
+            nextTension,
+
+          intervention:
+            intervention
+              ? {
+                  accepted: true,
+                  text: intervention,
+                  effect:
+                    interventionEffect
+                }
+              : null
         }
       },
       {
