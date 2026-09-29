@@ -1,4 +1,5 @@
 import { processPerceptions } from "./perception";
+import { chooseAction } from "./decisions";
 
 export type ActionType =
   | "OBSERVE"
@@ -78,13 +79,6 @@ function hasCapability(
   );
 }
 
-function recentlyDid(
-  character: Character,
-  action: ActionType
-) {
-  return character.recentActions.includes(action);
-}
-
 function rememberAction(
   character: Character,
   action: ActionType
@@ -121,33 +115,6 @@ function getRelationship(
     (relationship) =>
       relationship.targetId === targetId
   );
-}
-
-function setRelationship(
-  character: Character,
-  targetId: string,
-  changes: Partial<Relationship>
-) {
-  const relationship = getRelationship(
-    character,
-    targetId
-  );
-
-  if (!relationship) return;
-
-  if (changes.trust !== undefined) {
-    relationship.trust = Math.max(
-      0,
-      Math.min(100, changes.trust)
-    );
-  }
-
-  if (changes.suspicion !== undefined) {
-    relationship.suspicion = Math.max(
-      0,
-      Math.min(100, changes.suspicion)
-    );
-  }
 }
 
 export function createInitialWorld(): WorldState {
@@ -395,246 +362,6 @@ export function normalizeWorld(
   };
 }
 
-function generateLegalActions(
-  world: WorldState,
-  character: Character
-): ActionType[] {
-  const actions: ActionType[] = [
-    "WAIT",
-    "OBSERVE",
-  ];
-
-  if (
-    hasCapability(
-      character,
-      "investigation"
-    )
-  ) {
-    actions.push("INVESTIGATE");
-    actions.push("SEARCH");
-  }
-
-  const location = findLocation(
-    world,
-    character.location
-  );
-
-  if (
-    location?.connectedTo?.length
-  ) {
-    actions.push("MOVE");
-  }
-
-  const nearbyCharacter =
-    world.characters.find(
-      (other) =>
-        other.id !== character.id &&
-        other.location ===
-          character.location
-    );
-
-  if (nearbyCharacter) {
-    actions.push("TALK");
-    actions.push("FOLLOW");
-  }
-
-  return actions;
-}
-
-function chooseZaraAction(
-  world: WorldState,
-  zara: Character
-): ActionType {
-  const legal =
-    generateLegalActions(
-      world,
-      zara
-    );
-
-  if (
-    world.evidence.length === 0 &&
-    legal.includes("INVESTIGATE") &&
-    !recentlyDid(
-      zara,
-      "INVESTIGATE"
-    )
-  ) {
-    return "INVESTIGATE";
-  }
-
-  const daniel =
-    findCharacter(
-      world,
-      "daniel"
-    );
-
-  const relationship = daniel
-    ? getRelationship(
-        zara,
-        daniel.id
-      )
-    : undefined;
-
-  if (
-    world.evidence.length > 0 &&
-    relationship
-  ) {
-    if (
-      relationship.suspicion >= 60 &&
-      legal.includes("FOLLOW") &&
-      !recentlyDid(
-        zara,
-        "FOLLOW"
-      )
-    ) {
-      return "FOLLOW";
-    }
-
-    if (
-      legal.includes("SEARCH") &&
-      !recentlyDid(
-        zara,
-        "SEARCH"
-      )
-    ) {
-      return "SEARCH";
-    }
-
-    if (
-      relationship.suspicion < 75 &&
-      legal.includes("TALK") &&
-      !recentlyDid(
-        zara,
-        "TALK"
-      )
-    ) {
-      return "TALK";
-    }
-  }
-
-  if (legal.includes("MOVE")) {
-    return "MOVE";
-  }
-
-  return "OBSERVE";
-}
-
-function chooseDanielAction(
-  world: WorldState,
-  daniel: Character
-): ActionType {
-  const legal =
-    generateLegalActions(
-      world,
-      daniel
-    );
-
-  const zara =
-    findCharacter(
-      world,
-      "zara"
-    );
-
-  const relationship = zara
-    ? getRelationship(
-        daniel,
-        zara.id
-      )
-    : undefined;
-
-  if (
-    relationship &&
-    relationship.suspicion >= 55
-  ) {
-    if (legal.includes("MOVE")) {
-      return "MOVE";
-    }
-
-    return "OBSERVE";
-  }
-
-  if (
-    recentlyDid(
-      daniel,
-      "TALK"
-    ) &&
-    legal.includes("MOVE")
-  ) {
-    return "MOVE";
-  }
-
-  if (
-    legal.includes("TALK") &&
-    !recentlyDid(
-      daniel,
-      "TALK"
-    )
-  ) {
-    return "TALK";
-  }
-
-  if (legal.includes("OBSERVE")) {
-    return "OBSERVE";
-  }
-
-  return "WAIT";
-}
-
-function chooseAction(
-  world: WorldState,
-  character: Character
-): {
-  action: ActionType;
-  reason: string;
-} {
-  if (character.id === "zara") {
-    const action =
-      chooseZaraAction(
-        world,
-        character
-      );
-
-    return {
-      action,
-
-      reason:
-        action === "INVESTIGATE"
-          ? "Zara needs more evidence to understand the company."
-          : action === "SEARCH"
-          ? "Zara believes the current area may contain useful clues."
-          : action === "FOLLOW"
-          ? "Zara's suspicion of Daniel is becoming difficult to ignore."
-          : "Zara is continuing to investigate while avoiding unnecessary risk.",
-    };
-  }
-
-  if (character.id === "daniel") {
-    const action =
-      chooseDanielAction(
-        world,
-        character
-      );
-
-    return {
-      action,
-
-      reason:
-        action === "TALK"
-          ? "Daniel needs to manage his relationship with Zara."
-          : action === "MOVE"
-          ? "Daniel wants distance from the situation."
-          : "Daniel is trying to avoid exposing his connection to the company.",
-    };
-  }
-
-  return {
-    action: "WAIT",
-
-    reason:
-      "The character has no stronger immediate priority.",
-  };
-}
-
 function executeAction(
   world: WorldState,
   character: Character,
@@ -801,9 +528,15 @@ function executeAction(
           newEvidence
         );
 
-        character.knowledge.push(
-          newEvidence
-        );
+        if (
+          !character.knowledge.includes(
+            newEvidence
+          )
+        ) {
+          character.knowledge.push(
+            newEvidence
+          );
+        }
 
         character.currentPriority =
           "Determine why the company is recruiting students";
@@ -918,8 +651,9 @@ export function simulateDay(
 
   /*
    * PHASE 1
-   * Characters independently choose
-   * and execute their actions.
+   *
+   * Each character evaluates the current
+   * world using their own mind state.
    */
   for (const character of world.characters) {
     const decision =
@@ -930,7 +664,10 @@ export function simulateDay(
 
     characterUpdates[
       character.id
-    ] = decision;
+    ] = {
+      action: decision.action,
+      reason: decision.reason,
+    };
 
     const event =
       executeAction(
@@ -953,10 +690,9 @@ export function simulateDay(
 
   /*
    * PHASE 2
-   * Characters perceive what happened.
    *
-   * This is deliberately separate from
-   * action execution.
+   * Characters perceive the consequences
+   * of what happened.
    */
   const perceptions =
     processPerceptions(
@@ -966,7 +702,9 @@ export function simulateDay(
 
   /*
    * PHASE 3
-   * Perceptions modify internal state.
+   *
+   * Store those interpretations in the
+   * persistent world history.
    */
   for (const perception of perceptions) {
     world.events.push(
@@ -975,8 +713,8 @@ export function simulateDay(
   }
 
   /*
-   * The situation shown to the user
-   * describes what actually happened.
+   * The public situation describes
+   * what actually happened.
    */
   world.situation =
     events.join(" ");
