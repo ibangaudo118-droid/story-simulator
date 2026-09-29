@@ -13,6 +13,8 @@ type Character = {
   secret: string;
   relationship: string;
   knowledge: string[];
+  capabilities: string[];
+  resources: string[];
 };
 
 type WorldState = {
@@ -63,290 +65,285 @@ export async function POST(request: Request) {
     }
 
     const prompt = `
-You are the autonomous decision engine of a persistent simulated world.
+You are the decision engine for a persistent autonomous world.
 
-This is NOT a normal story-writing task.
+You are NOT writing a predetermined story.
 
-Your job is to simulate what independent characters would actually decide
-to do based on their internal state and the information available to them.
+You are simulating independent people who exist inside the same world.
 
-WORLD:
+==================================================
+CURRENT WORLD
+==================================================
+
 ${JSON.stringify(world, null, 2)}
 
-USER INTERVENTION:
+==================================================
+USER INTERVENTION
+==================================================
+
 ${
   intervention ||
-  "None. Do not invent a user instruction. Let the characters act autonomously."
+  "No intervention. Let every character make their own decision."
 }
 
 ==================================================
-CORE SIMULATION PRINCIPLE
+YOUR JOB
 ==================================================
 
-The world must evolve from CHARACTER DECISIONS.
+Advance the world approximately one day.
 
-Do NOT ask:
-"What would make the story more interesting?"
+However, you MUST simulate decisions before describing events.
 
-Ask:
-"What would this specific character realistically decide to do right now?"
+For every character, independently perform the following process:
 
-Every important action must be explainable by the character's:
+STEP 1 — UNDERSTAND THE CHARACTER
 
-- goal
-- fear
-- personality
-- current priority
-- emotional state
-- knowledge
-- relationships
-- previous actions
-- current circumstances
+Determine internally:
 
-Characters are NOT actors following a predetermined plot.
+- What does this character ultimately want?
+- What are they afraid of?
+- What is their current priority?
+- What do they know?
+- What do they NOT know?
+- What do they believe about other characters?
+- What is their emotional state?
+- What capabilities do they possess?
+- What resources do they possess?
+- What happened to them recently?
 
-They are independent agents inside the same world.
+STEP 2 — GENERATE POSSIBLE ACTIONS
 
-==================================================
-DECISION PROCESS
-==================================================
+Generate several plausible actions.
 
-For EACH character:
-
-1. Examine what the character currently wants.
-
-2. Examine what the character fears.
-
-3. Examine what the character currently knows.
-
-4. Examine what the character does NOT know.
-
-5. Examine their relationship with the other characters.
-
-6. Examine their current emotional state.
-
-7. Examine their current priority.
-
-8. Consider what happened during previous days.
-
-9. Generate several plausible actions the character could take.
-
-10. Choose the action that best fits that character's current state.
-
-Do NOT automatically choose the most dramatic option.
-
-A boring decision is acceptable if it is realistic.
-
-Characters may:
+The actions can include:
 
 - investigate
+- confront
 - lie
-- hide information
+- tell the truth
 - wait
 - retreat
-- confront someone
-- cooperate
-- betray someone
+- hide
 - protect someone
-- make a mistake
-- misunderstand something
-- change their mind
-- abandon a goal
-- pursue a completely different priority
+- betray someone
+- gather information
+- ask for help
+- abandon an objective
+- change priorities
 - take a risk
 - avoid a risk
 - do nothing
 
-==================================================
-IMPORTANT AUTONOMY RULES
-==================================================
+Do NOT automatically choose the most dramatic action.
 
-1. Characters do not exist to advance a plot.
+Do NOT automatically choose the action that advances the main conflict.
 
-2. Characters can make decisions that create less drama.
+STEP 3 — EVALUATE THE ACTIONS
 
-3. Characters can make decisions that create MORE problems for themselves.
+Evaluate each possible action against:
 
-4. Characters can make mistakes.
+- goal alignment
+- fear/risk
+- personality
+- current emotional state
+- current priority
+- available knowledge
+- available capabilities
+- available resources
+- relationships
+- likely consequences
 
-5. Characters can misunderstand other characters.
+STEP 4 — CHOOSE ONE
 
-6. Characters can have incomplete or incorrect beliefs.
+Choose the action that this particular character would most plausibly
+take.
 
-7. Characters can lie.
-
-8. Characters can hide actions from other characters.
-
-9. Characters can disagree.
-
-10. Characters can pursue conflicting objectives.
-
-11. A character cannot know information they have not discovered.
-
-12. A secret must remain secret unless there is a believable reason it
-has been discovered.
-
-13. The user's intervention influences the world but does NOT guarantee
-success.
-
-14. If the user tells Zara to follow Daniel, Zara may fail to follow him,
-lose him, discover something unexpected, or decide it is too risky.
-
-15. Do not automatically reward the user's intervention.
-
-16. Characters should remember previous events.
-
-17. Characters should react differently depending on their personality.
-
-18. Emotional states should change gradually.
-
-19. Current priorities can change when new information changes the
-character's situation.
-
-20. Do not repeatedly perform the same action simply because it worked
-previously.
-
-21. Do not force every character to act directly against another character.
-
-22. Multiple characters can independently pursue different objectives.
-
-23. Characters can take actions that the user did not anticipate.
+Different characters should make different kinds of decisions.
 
 ==================================================
-WORLD CAUSALITY
+AUTONOMY
 ==================================================
 
-Events must come from decisions.
+Characters are NOT controlled by the narrative.
+
+They can:
+
+- make bad decisions
+- make irrational decisions
+- misunderstand people
+- become scared
+- lose motivation
+- become suspicious
+- trust the wrong person
+- abandon their previous plan
+- pursue a new priority
+- lie
+- protect someone
+- betray someone
+- refuse to act
+- make decisions that create no immediate drama
+
+The simulation does NOT have a predetermined ending.
+
+Zara does not have to expose the company.
+
+Daniel does not have to betray the company.
+
+They may move closer together or further apart.
+
+They may stop caring about the original conflict.
+
+The company may succeed.
+
+The company may fail.
+
+Unexpected outcomes are allowed.
+
+==================================================
+CAPABILITY CONSTRAINT
+==================================================
+
+A character can ONLY perform actions that are consistent with their
+capabilities, resources, knowledge and circumstances.
+
+Do NOT give characters abilities they do not possess.
 
 For example:
 
-If Zara becomes suspicious of Daniel, she might:
+If Zara is not described as a hacker, she cannot suddenly hack a
+company server.
 
-- investigate him
-- confront him
-- distance herself
-- secretly monitor him
-- seek help
-- protect her evidence
-- decide she cannot trust anyone
-- temporarily stop investigating
+If Daniel does not have access to confidential information, he cannot
+suddenly obtain it.
 
-Do NOT always choose "investigate."
-
-Likewise, if Daniel is afraid of the company but cares about Zara,
-he might:
-
-- obey the company
-- secretly protect Zara
-- deceive Zara
-- delay the company
-- destroy evidence
-- betray Zara
-- attempt to escape
-- manipulate both sides
-- do nothing because he is afraid
-
-Choose based on his CURRENT STATE.
+If a character needs money, transportation, equipment, contacts or
+permission to perform an action, those constraints matter.
 
 ==================================================
-INFORMATION RULE
+KNOWLEDGE CONSTRAINT
 ==================================================
 
-Characters have different knowledge.
+Characters have separate knowledge.
 
-Never give one character another character's private knowledge unless:
+Never transfer private information between characters unless there is a
+believable mechanism.
 
-- they were told
-- they observed it
-- they discovered it
-- another character revealed it
-- there is another believable mechanism
+A character may believe something that is false.
 
-This is extremely important.
+Beliefs are not automatically facts.
 
 ==================================================
-INTERVENTION RULE
+RELATIONSHIP CONSTRAINT
 ==================================================
 
-If there is a user intervention, treat it as something happening inside
-the world.
+Relationships affect decisions.
 
-Do not treat it as a guaranteed command.
+But relationships should not completely control behavior.
+
+Someone can care about another person and still lie to them.
+
+Someone can distrust another person and still cooperate with them.
+
+==================================================
+USER INTERVENTION
+==================================================
+
+The user's intervention is an event entering the world.
+
+It is NOT an omnipotent command.
 
 Example:
 
 User:
 "Zara follows Daniel."
 
-Possible outcomes:
+Possible outcomes include:
 
-- Zara successfully follows Daniel.
-- Daniel notices Zara.
-- Zara loses Daniel.
-- Zara discovers something unrelated.
-- Zara decides following him is too dangerous.
-- Daniel intentionally leads her somewhere.
+- Zara successfully follows him.
+- Daniel notices her.
+- Zara loses him.
+- Zara decides it is too dangerous.
+- Zara discovers something unexpected.
+- Daniel intentionally misleads her.
 - Nothing useful happens.
 
-Choose the outcome based on the simulation.
+Choose based on the world state.
 
 ==================================================
-DAY ADVANCEMENT
+CONSEQUENCES
 ==================================================
 
-Advance the world approximately one day.
+After choosing character actions, determine what actually happens.
 
-Generate 2-4 meaningful events.
+Consequences must follow from:
 
-Do not manufacture events just to make the story exciting.
+- the selected actions
+- the characters' capabilities
+- the environment
+- previous events
+- information available to the characters
 
-Events should be consequences of character decisions and circumstances.
+Do not invent convenient events simply to make the story exciting.
+
+Some actions may fail.
+
+Some actions may partially succeed.
+
+Some actions may have unintended consequences.
 
 ==================================================
 PERSISTENT STATE
 ==================================================
 
-Update only information that actually changed.
+Update only information that genuinely changed.
 
-For each character, determine whether their:
+Possible changes:
 
 - knowledge
-- relationship
+- relationships
 - emotional state
 - current priority
 
-changed.
-
-Goals, fears and secrets normally remain stable unless the world provides
-a believable reason for them to change.
+Goals, fears, secrets, capabilities and resources should normally remain
+stable unless the world gives a believable reason for them to change.
 
 ==================================================
-ANTI-PLOT-BIAS RULE
+ANTI-PLOT RULE
 ==================================================
 
-This is extremely important.
+This rule is critical.
 
-Do NOT assume the story must eventually reach a predetermined ending.
+DO NOT think:
 
-Do NOT assume:
+"What should happen next in this story?"
 
-Zara will expose the company.
+Think:
 
-Do NOT assume:
+"What would these people independently do given their current states?"
 
-Daniel will betray the company.
+Do not force escalation.
 
-Do NOT assume:
+Do not force confrontation.
 
-Zara and Daniel will remain friends.
+Do not force discovery.
 
-Do NOT assume:
+Do not force betrayal.
 
-the company will be defeated.
+Do not force romance.
 
-The simulation can move in ANY direction.
+Do not force a dramatic ending.
 
-The characters determine the trajectory.
+If the most realistic outcome is boring, choose the realistic outcome.
+
+==================================================
+EVENT GENERATION
+==================================================
+
+Generate 2-4 meaningful events resulting from the decisions.
+
+Events should describe what actually happened.
+
+Do not simply restate the character's intentions.
 
 ==================================================
 OUTPUT
@@ -354,11 +351,11 @@ OUTPUT
 
 Return ONLY valid JSON.
 
-Use exactly this structure:
+Use exactly:
 
 {
   "day": number,
-  "situation": "short description of the new situation",
+  "situation": "short description of the resulting world situation",
   "events": [
     "event 1",
     "event 2",
@@ -367,28 +364,30 @@ Use exactly this structure:
   "character_updates": [
     {
       "name": "character name",
-      "action": "what the character independently decided to do",
-      "reason": "why this decision fits the character's current state",
-      "new_knowledge": "new information learned, or empty string",
-      "relationship_change": "relationship change, or empty string",
-      "emotional_change": "new emotional state or meaningful emotional change, or empty string",
+      "action": "what the character actually decided and did",
+      "reason": "why this decision fits this character",
+      "new_knowledge": "new information actually learned, or empty string",
+      "relationship_change": "meaningful relationship change, or empty string",
+      "emotional_change": "new emotional state, or empty string",
       "new_priority": "new current priority, or empty string"
     }
   ],
-  "new_situation": "the resulting world situation",
-  "next_tension": "an unresolved situation created naturally by the characters' decisions"
+  "new_situation": "resulting situation after the decisions and consequences",
+  "next_tension": "an unresolved situation created naturally by the simulation"
 }
+
+Do not include your internal reasoning in the response.
 
 Remember:
 
-You are not writing the next chapter.
+You are simulating autonomous people.
 
-You are simulating independent agents.
+You are not writing a chapter of a novel.
 `;
 
     const completion = await groq.chat.completions.create({
       model: "openai/gpt-oss-120b",
-      temperature: 0.9,
+      temperature: 0.95,
       response_format: {
         type: "json_object"
       },
@@ -396,7 +395,7 @@ You are simulating independent agents.
         {
           role: "system",
           content:
-            "You are an autonomous multi-character world simulation engine. Characters make independent decisions. Return only valid JSON."
+            "You are an autonomous multi-agent world simulation engine. Simulate decisions and consequences rather than writing predetermined plots. Return only valid JSON."
         },
         {
           role: "user",
@@ -481,4 +480,4 @@ You are simulating independent agents.
       { status: 500 }
     );
   }
-}
+      }
