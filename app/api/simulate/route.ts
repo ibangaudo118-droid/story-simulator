@@ -1,1968 +1,902 @@
-import { NextResponse } from "next";
-import Groq from "groq-sdk";
+import { NextRequest, NextResponse } from "next/server";
 
-export const runtime = "nodejs";
+type ActionType =
+  | "MOVE"
+  | "OBSERVE"
+  | "TALK"
+  | "FOLLOW"
+  | "SEARCH"
+  | "INVESTIGATE"
+  | "CONFRONT"
+  | "CONTACT"
+  | "WAIT";
 
-/*
-=========================================================
-TYPES
-=========================================================
-*/
-
-type Character = {
+type Location = {
   id: string;
   name: string;
-  role: string;
-  personality: string;
-  goal: string;
-  fear: string;
-  current_priority: string;
-  emotional_state: string;
-  secret: string;
-  relationship: string;
-  knowledge: string[];
-  capabilities: string[];
-  resources: string[];
-  location: string;
-};
-
-type WorldEntity = {
-  id: string;
-  name: string;
-  type: "person" | "organization" | "location";
-  description: string;
-  location?: string;
 };
 
 type WorldObject = {
   id: string;
   name: string;
-  description: string;
-  location: string;
-  owner?: string;
-  hidden?: boolean;
-  discoverable_by?: string[];
-  known_by?: string[];
+  locationId: string;
+  ownerId?: string;
+  visible: boolean;
   destroyed?: boolean;
+};
+
+type Character = {
+  id: string;
+  name: string;
+  role: string;
+  goal: string;
+  fear: string;
+  secret: string;
+  currentPriority: string;
+  emotionalState: string;
+  locationId: string;
+  knowledge: string[];
+  capabilities: string[];
+  resources: string[];
+  relationships: Record<string, string>;
+};
+
+type WorldEvent = {
+  id: string;
+  day: number;
+  actorId?: string;
+  type: ActionType | "SYSTEM";
+  description: string;
 };
 
 type WorldState = {
   day: number;
-  location: string;
-  situation: string;
+  locations: Location[];
   characters: Character[];
-  entities: WorldEntity[];
-  objects?: WorldObject[];
-  events: string[];
+  objects: WorldObject[];
+  events: WorldEvent[];
 };
 
-type ActionType =
-  | "observe"
-  | "move"
-  | "talk"
-  | "investigate"
-  | "search"
-  | "protect"
-  | "lie"
-  | "follow"
-  | "wait"
-  | "contact"
-  | "destroy"
-  | "steal"
-  | "confront";
+type LegalAction = {
+  id: string;
+  actorId: string;
+  type: ActionType;
+  targetCharacterId?: string;
+  targetLocationId?: string;
+  targetObjectId?: string;
+};
 
-type ProposedAction = {
-  actor: string;
-  action_type: ActionType;
-  target: string;
+type ExecutedAction = LegalAction & {
   description: string;
-  reason: string;
-  candidate_id?: string;
-  source?: "character" | "intervention";
+  knowledgeGained: string[];
 };
 
-type ValidatedAction = ProposedAction & {
-  result: "success" | "partial" | "failure";
-  consequence: string;
-};
+const MODEL = "openai/gpt-oss-120b";
 
-type CharacterUpdate = {
-  name: string;
-  action: string;
-  reason: string;
-  new_knowledge: string;
-  relationship_change: string;
-  emotional_change: string;
-  new_priority: string;
-};
+function getGroqKey() {
+  return process.env.GROQ_API_KEY;
+}
 
-type SimulationResult = {
-  day: number;
-  situation: string;
-  proposed_actions: ProposedAction[];
-  validated_actions: ValidatedAction[];
-  events: string[];
-  character_updates: CharacterUpdate[];
-  new_situation: string;
-  next_tension: string;
-};
+function clone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value));
+}
 
-type CandidateResponse = {
-  candidates?: Array<{
-    actor: string;
-    actions: Array<{
-      action_type: ActionType;
-      target: string;
-      description: string;
-      reason: string;
-    }>;
-  }>;
-};
+function findCharacter(world: WorldState, id: string) {
+  return world.characters.find((c) => c.id === id);
+}
 
-type SelectionResponse = {
-  selections?: Array<{
-    actor: string;
-    candidate_id: string;
-  }>;
-};
+function findLocation(world: WorldState, id: string) {
+  return world.locations.find((l) => l.id === id);
+}
 
-/*
-=========================================================
-GROQ
-=========================================================
-*/
+function findObject(world: WorldState, id: string) {
+  return world.objects.find((o) => o.id === id);
+}
 
-const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY
-});
+function nearbyCharacters(world: WorldState, actor: Character) {
+  return world.characters.filter(
+    (c) => c.id !== actor.id && c.locationId === actor.locationId
+  );
+}
 
-/*
-=========================================================
-LOOKUPS
-=========================================================
-*/
+/**
+ * IMPORTANT:
+ * The world below is the source of truth.
+ *
+ * The AI is NOT allowed to add anything to it.
+ */
+function createInitialWorld(): WorldState {
+  return {
+    day: 1,
 
-function findCharacter(
+    locations: [
+      {
+        id: "unilag_campus",
+        name: "University of Lagos campus",
+      },
+      {
+        id: "campus_cafe",
+        name: "Campus Café",
+      },
+      {
+        id: "company_office",
+        name: "Company Liaison Office",
+      },
+    ],
+
+    characters: [
+      {
+        id: "zara",
+        name: "Zara",
+        role: "Student investigator",
+        goal: "Discover what the mysterious technology company is doing on campus.",
+        fear: "The company will harm innocent students or discover her investigation.",
+        secret: "She has already collected evidence against the company.",
+        currentPriority: "Find concrete evidence.",
+        emotionalState: "Suspicious but determined.",
+        locationId: "unilag_campus",
+
+        knowledge: [
+          "The company has been approaching students privately.",
+          "Some students who were recruited have stopped talking openly about the company.",
+        ],
+
+        capabilities: [
+          "observe",
+          "investigate",
+          "follow",
+          "search",
+          "confront",
+          "talk",
+        ],
+
+        resources: [
+          "smartphone",
+          "student ID",
+          "personal laptop",
+          "student contacts",
+        ],
+
+        relationships: {
+          daniel:
+            "She trusts Daniel deeply, but she does not know that he is hiding something.",
+        },
+      },
+
+      {
+        id: "daniel",
+        name: "Daniel",
+        role: "Student and company contact",
+        goal: "Secure his financial future while protecting Zara.",
+        fear: "The company will harm his family if he disobeys.",
+        secret:
+          "The company offered him ₦5m to identify students investigating it.",
+        currentPriority: "Protect his family without betraying Zara.",
+        emotionalState: "Conflicted and afraid.",
+        locationId: "unilag_campus",
+
+        knowledge: [
+          "The company knows Zara is investigating.",
+          "The company wants him to identify suspicious students.",
+        ],
+
+        capabilities: [
+          "persuasion",
+          "observe",
+          "talk",
+          "contact",
+          "lie",
+          "move",
+        ],
+
+        resources: [
+          "smartphone",
+          "student ID",
+          "company contact",
+          "student contacts",
+        ],
+
+        relationships: {
+          zara: "He cares deeply about Zara but is hiding the company's offer.",
+        },
+      },
+    ],
+
+    objects: [],
+
+    events: [
+      {
+        id: "event_day1_meeting",
+        day: 1,
+        actorId: "zara",
+        type: "SYSTEM",
+        description:
+          "Zara notices Daniel leaving a private meeting with the mysterious company.",
+      },
+    ],
+  };
+}
+
+/**
+ * Generates ONLY actions that are physically/logically available.
+ * The LLM never generates the action list.
+ */
+function generateLegalActions(
   world: WorldState,
-  name: string
-): Character | undefined {
-  return world.characters.find(
-    (character) =>
-      character.name.toLowerCase() ===
-      name.toLowerCase()
-  );
-}
+  actor: Character
+): LegalAction[] {
+  const actions: LegalAction[] = [];
 
-function findEntity(
-  world: WorldState,
-  name: string
-): WorldEntity | undefined {
-  return world.entities.find(
-    (entity) =>
-      entity.name.toLowerCase() ===
-        name.toLowerCase() ||
-      entity.id.toLowerCase() ===
-        name.toLowerCase()
-  );
-}
+  const nearby = nearbyCharacters(world, actor);
 
-function findObject(
-  world: WorldState,
-  name: string
-): WorldObject | undefined {
-  return (world.objects || []).find(
-    (object) =>
-      object.name.toLowerCase() ===
-        name.toLowerCase() ||
-      object.id.toLowerCase() ===
-        name.toLowerCase()
-  );
-}
+  actions.push({
+    id: `${actor.id}_wait`,
+    actorId: actor.id,
+    type: "WAIT",
+  });
 
-function sameLocation(
-  actor: Character,
-  target: Character
-): boolean {
-  return (
-    actor.location.toLowerCase() ===
-    target.location.toLowerCase()
-  );
-}
+  actions.push({
+    id: `${actor.id}_observe`,
+    actorId: actor.id,
+    type: "OBSERVE",
+  });
 
-/*
-=========================================================
-OBJECT NORMALIZATION
-=========================================================
-*/
+  for (const character of nearby) {
+    actions.push({
+      id: `${actor.id}_talk_${character.id}`,
+      actorId: actor.id,
+      type: "TALK",
+      targetCharacterId: character.id,
+    });
 
-function normalizeWorld(
-  input: WorldState
-): WorldState {
-  const world = structuredClone(input);
-
-  if (!Array.isArray(world.objects)) {
-    world.objects = [];
+    actions.push({
+      id: `${actor.id}_confront_${character.id}`,
+      actorId: actor.id,
+      type: "CONFRONT",
+      targetCharacterId: character.id,
+    });
   }
 
-  /*
-   * Convert existing character resources into
-   * persistent objects.
-   *
-   * This does NOT invent new story objects.
-   */
+  for (const location of world.locations) {
+    if (location.id !== actor.locationId) {
+      actions.push({
+        id: `${actor.id}_move_${location.id}`,
+        actorId: actor.id,
+        type: "MOVE",
+        targetLocationId: location.id,
+      });
+    }
+  }
+
+  for (const character of nearby) {
+    actions.push({
+      id: `${actor.id}_follow_${character.id}`,
+      actorId: actor.id,
+      type: "FOLLOW",
+      targetCharacterId: character.id,
+    });
+  }
+
+  actions.push({
+    id: `${actor.id}_search_${actor.locationId}`,
+    actorId: actor.id,
+    type: "SEARCH",
+    targetLocationId: actor.locationId,
+  });
 
   for (const character of world.characters) {
-    for (const resource of character.resources || []) {
-      const exists = world.objects.some(
-        (object) =>
-          object.name.toLowerCase() ===
-            resource.toLowerCase() &&
-          object.owner?.toLowerCase() ===
-            character.name.toLowerCase()
-      );
-
-      if (!exists) {
-        world.objects.push({
-          id: `${character.id}-${resource
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")}`,
-
-          name: resource,
-
-          description:
-            `${resource} belonging to ${character.name}.`,
-
-          location: character.location,
-
-          owner: character.name,
-
-          hidden: false,
-
-          discoverable_by: [
-            character.name
-          ],
-
-          known_by: [
-            character.name
-          ]
-        });
-      }
+    if (character.id !== actor.id && actor.capabilities.includes("contact")) {
+      actions.push({
+        id: `${actor.id}_contact_${character.id}`,
+        actorId: actor.id,
+        type: "CONTACT",
+        targetCharacterId: character.id,
+      });
     }
   }
 
-  return world;
-}
-
-/*
-=========================================================
-KNOWLEDGE
-=========================================================
-*/
-
-function addKnowledge(
-  character: Character,
-  knowledge: string
-) {
-  const clean = knowledge.trim();
-
-  if (!clean) {
-    return;
+  if (actor.capabilities.includes("investigate")) {
+    for (const location of world.locations) {
+      actions.push({
+        id: `${actor.id}_investigate_${location.id}`,
+        actorId: actor.id,
+        type: "INVESTIGATE",
+        targetLocationId: location.id,
+      });
+    }
   }
 
-  const exists =
-    character.knowledge.some(
-      (item) =>
-        item.toLowerCase() ===
-        clean.toLowerCase()
+  return actions;
+}
+
+/**
+ * Removes impossible actions and duplicates.
+ */
+function validateActions(
+  world: WorldState,
+  actions: LegalAction[],
+  actor: Character
+): LegalAction[] {
+  const valid: LegalAction[] = [];
+
+  for (const action of actions) {
+    if (action.actorId !== actor.id) continue;
+
+    if (action.targetCharacterId) {
+      if (!findCharacter(world, action.targetCharacterId)) continue;
+    }
+
+    if (action.targetLocationId) {
+      if (!findLocation(world, action.targetLocationId)) continue;
+    }
+
+    if (action.targetObjectId) {
+      if (!findObject(world, action.targetObjectId)) continue;
+    }
+
+    if (
+      ["TALK", "CONFRONT", "FOLLOW"].includes(action.type) &&
+      action.targetCharacterId
+    ) {
+      const target = findCharacter(world, action.targetCharacterId);
+
+      if (!target) continue;
+
+      if (
+        action.type !== "FOLLOW" &&
+        target.locationId !== actor.locationId
+      ) {
+        continue;
+      }
+    }
+
+    if (action.type === "MOVE") {
+      if (!action.targetLocationId) continue;
+
+      if (action.targetLocationId === actor.locationId) {
+        continue;
+      }
+    }
+
+    if (action.type === "SEARCH") {
+      if (action.targetLocationId !== actor.locationId) {
+        continue;
+      }
+    }
+
+    valid.push(action);
+  }
+
+  const seen = new Set<string>();
+
+  return valid.filter((action) => {
+    if (seen.has(action.id)) return false;
+
+    seen.add(action.id);
+    return true;
+  });
+}
+
+/**
+ * The LLM is ONLY allowed to select one action
+ * from the already-generated legal list.
+ */
+async function chooseAction(
+  world: WorldState,
+  actor: Character,
+  legalActions: LegalAction[]
+): Promise<LegalAction> {
+  const apiKey = getGroqKey();
+
+  if (!apiKey || legalActions.length === 0) {
+    return legalActions[0];
+  }
+
+  const actionDescriptions = legalActions.map((action) => {
+    const targetCharacter = action.targetCharacterId
+      ? findCharacter(world, action.targetCharacterId)?.name
+      : undefined;
+
+    const targetLocation = action.targetLocationId
+      ? findLocation(world, action.targetLocationId)?.name
+      : undefined;
+
+    return {
+      id: action.id,
+      type: action.type,
+      targetCharacter,
+      targetLocation,
+    };
+  });
+
+  const prompt = `
+You are the decision-making component of a persistent world simulation.
+
+You are NOT a storyteller.
+
+You MUST NOT invent:
+- people
+- objects
+- locations
+- organizations
+- events
+- evidence
+- messages
+- discoveries
+- consequences
+
+You may ONLY choose ONE action from the supplied legal action list.
+
+Character:
+${JSON.stringify(actor, null, 2)}
+
+Current world:
+${JSON.stringify(
+  {
+    day: world.day,
+    locations: world.locations,
+    characters: world.characters.map((c) => ({
+      id: c.id,
+      name: c.name,
+      locationId: c.locationId,
+      goal: c.goal,
+      fear: c.fear,
+      currentPriority: c.currentPriority,
+      emotionalState: c.emotionalState,
+      knowledge: c.knowledge,
+      relationships: c.relationships,
+    })),
+    objects: world.objects,
+  },
+  null,
+  2
+)}
+
+LEGAL ACTIONS:
+${JSON.stringify(actionDescriptions, null, 2)}
+
+Choose exactly ONE action.
+
+Return ONLY valid JSON:
+
+{
+  "actionId": "exact-id-from-the-list"
+}
+
+Do not return explanations.
+Do not create another action.
+`;
+
+  try {
+    const response = await fetch(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: MODEL,
+          temperature: 0.2,
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a constrained simulation decision engine. Never invent actions.",
+            },
+            {
+              role: "user",
+              content: prompt,
+            },
+          ],
+          response_format: {
+            type: "json_object",
+          },
+        }),
+      }
     );
 
-  if (!exists) {
-    character.knowledge.push(clean);
+    if (!response.ok) {
+      throw new Error(`Groq returned ${response.status}`);
+    }
+
+    const data = await response.json();
+
+    const raw = data?.choices?.[0]?.message?.content;
+
+    if (!raw) {
+      throw new Error("No decision returned");
+    }
+
+    const parsed = JSON.parse(raw);
+
+    const selected = legalActions.find(
+      (action) => action.id === parsed.actionId
+    );
+
+    if (selected) {
+      return selected;
+    }
+  } catch (error) {
+    console.error("Decision engine error:", error);
   }
+
+  // Deterministic fallback.
+  return legalActions[0];
 }
 
-/*
-=========================================================
-EVENTS
-=========================================================
-*/
-
-function addEvent(
+/**
+ * THIS is the actual simulation.
+ *
+ * No LLM is called here.
+ * No new world entities can be created here.
+ */
+function executeAction(
   world: WorldState,
-  event: string
-) {
-  const clean = event.trim();
-
-  if (!clean) {
-    return;
-  }
-
-  world.events.push(clean);
-}
-
-/*
-=========================================================
-ACTION VALIDATION
-=========================================================
-*/
-
-function validateAction(
-  world: WorldState,
-  action: ProposedAction
-): ValidatedAction {
-  const actor = findCharacter(
-    world,
-    action.actor
-  );
+  action: LegalAction
+): ExecutedAction {
+  const actor = findCharacter(world, action.actorId);
 
   if (!actor) {
-    return {
-      ...action,
-      result: "failure",
-      consequence:
-        "The actor does not exist."
-    };
+    throw new Error("Actor does not exist.");
   }
 
-  const targetCharacter =
-    findCharacter(
-      world,
-      action.target
-    );
+  const knowledgeGained: string[] = [];
+  let description = "";
 
-  const targetEntity =
-    findEntity(
-      world,
-      action.target
-    );
-
-  const targetObject =
-    findObject(
-      world,
-      action.target
-    );
-
-  const targetExists =
-    Boolean(targetCharacter) ||
-    Boolean(targetEntity) ||
-    Boolean(targetObject) ||
-    action.target === "" ||
-    action.target.toLowerCase() === "self";
-
-  /*
-   * THE MOST IMPORTANT RULE:
-   *
-   * No unknown target can ever become real.
-   */
-
-  if (!targetExists) {
-    return {
-      ...action,
-      result: "failure",
-      consequence:
-        `The target "${action.target}" does not exist in the world.`
-    };
-  }
-
-  const capabilities =
-    (actor.capabilities || [])
-      .join(" ")
-      .toLowerCase();
-
-  /*
-   * TALK / CONFRONT / LIE
-   */
-
-  if (
-    (
-      action.action_type === "talk" ||
-      action.action_type === "confront" ||
-      action.action_type === "lie"
-    ) &&
-    targetCharacter
-  ) {
-    if (
-      !sameLocation(
-        actor,
-        targetCharacter
-      )
-    ) {
-      return {
-        ...action,
-        result: "failure",
-        consequence:
-          `${actor.name} cannot interact with ${targetCharacter.name} because they are not in the same location.`
-      };
-    }
-  }
-
-  /*
-   * MOVE
-   */
-
-  if (
-    action.action_type === "move"
-  ) {
-    if (
-      !targetEntity ||
-      targetEntity.type !== "location"
-    ) {
-      return {
-        ...action,
-        result: "failure",
-        consequence:
-          "The destination must be an existing location."
-      };
-    }
-  }
-
-  /*
-   * FOLLOW
-   */
-
-  if (
-    action.action_type === "follow"
-  ) {
-    if (!targetCharacter) {
-      return {
-        ...action,
-        result: "failure",
-        consequence:
-          "Follow requires an existing character."
-      };
-    }
-  }
-
-  /*
-   * INVESTIGATE
-   */
-
-  if (
-    action.action_type ===
-      "investigate"
-  ) {
-    const capable =
-      capabilities.includes("investigat") ||
-      capabilities.includes("observ") ||
-      capabilities.includes("research");
-
-    if (!capable) {
-      return {
-        ...action,
-        result: "failure",
-        consequence:
-          `${actor.name} does not have the capability to investigate.`
-      };
-    }
-  }
-
-  /*
-   * SEARCH
-   */
-
-  if (
-    action.action_type === "search"
-  ) {
-    const capable =
-      capabilities.includes("investigat") ||
-      capabilities.includes("observ") ||
-      capabilities.includes("search");
-
-    if (!capable) {
-      return {
-        ...action,
-        result: "failure",
-        consequence:
-          `${actor.name} does not have the capability to search.`
-      };
+  switch (action.type) {
+    case "WAIT": {
+      description = `${actor.name} waits and observes what happens around them.`;
+      break;
     }
 
-    /*
-     * If searching an object, it must physically
-     * exist at the actor's location.
-     */
+    case "OBSERVE": {
+      const nearby = nearbyCharacters(world, actor);
 
-    if (targetObject) {
-      if (
-        targetObject.location.toLowerCase() !==
-        actor.location.toLowerCase()
-      ) {
-        return {
-          ...action,
-          result: "failure",
-          consequence:
-            `${targetObject.name} is not at ${actor.location}.`
-        };
+      if (nearby.length > 0) {
+        description = `${actor.name} observes the people nearby.`;
+      } else {
+        description = `${actor.name} observes the surroundings.`;
       }
+
+      break;
     }
+
+    case "MOVE": {
+      const destination = action.targetLocationId
+        ? findLocation(world, action.targetLocationId)
+        : undefined;
+
+      if (!destination) {
+        throw new Error("Invalid destination.");
+      }
+
+      actor.locationId = destination.id;
+
+      description = `${actor.name} moves to ${destination.name}.`;
+
+      break;
+    }
+
+    case "FOLLOW": {
+      const target = action.targetCharacterId
+        ? findCharacter(world, action.targetCharacterId)
+        : undefined;
+
+      if (!target) {
+        throw new Error("Follow target does not exist.");
+      }
+
+      actor.locationId = target.locationId;
+
+      description = `${actor.name} follows ${target.name}.`;
+
+      break;
+    }
+
+    case "TALK": {
+      const target = action.targetCharacterId
+        ? findCharacter(world, action.targetCharacterId)
+        : undefined;
+
+      if (!target) {
+        throw new Error("Talk target does not exist.");
+      }
+
+      if (target.locationId !== actor.locationId) {
+        throw new Error("Characters are not in the same location.");
+      }
+
+      description = `${actor.name} talks with ${target.name}.`;
+
+      break;
+    }
+
+    case "CONFRONT": {
+      const target = action.targetCharacterId
+        ? findCharacter(world, action.targetCharacterId)
+        : undefined;
+
+      if (!target) {
+        throw new Error("Confront target does not exist.");
+      }
+
+      if (target.locationId !== actor.locationId) {
+        throw new Error("Characters are not in the same location.");
+      }
+
+      description = `${actor.name} confronts ${target.name}.`;
+
+      break;
+    }
+
+    case "SEARCH": {
+      const location = action.targetLocationId
+        ? findLocation(world, action.targetLocationId)
+        : undefined;
+
+      if (!location || location.id !== actor.locationId) {
+        throw new Error("Invalid search location.");
+      }
+
+      const objects = world.objects.filter(
+        (object) =>
+          object.locationId === location.id &&
+          object.visible &&
+          !object.destroyed
+      );
+
+      if (objects.length === 0) {
+        description = `${actor.name} searches ${location.name} but finds nothing relevant.`;
+      } else {
+        const names = objects.map((object) => object.name);
+
+        description = `${actor.name} searches ${location.name} and notices ${names.join(
+          ", "
+        )}.`;
+
+        for (const object of objects) {
+          knowledgeGained.push(
+            `${object.name} is located at ${location.name}.`
+          );
+        }
+      }
+
+      break;
+    }
+
+    case "INVESTIGATE": {
+      const location = action.targetLocationId
+        ? findLocation(world, action.targetLocationId)
+        : undefined;
+
+      if (!location) {
+        throw new Error("Investigation target does not exist.");
+      }
+
+      description = `${actor.name} investigates ${location.name}.`;
+
+      break;
+    }
+
+    case "CONTACT": {
+      const target = action.targetCharacterId
+        ? findCharacter(world, action.targetCharacterId)
+        : undefined;
+
+      if (!target) {
+        throw new Error("Contact target does not exist.");
+      }
+
+      description = `${actor.name} contacts ${target.name}.`;
+
+      break;
+    }
+
+    default:
+      throw new Error("Unsupported action.");
   }
 
-  /*
-   * STEAL
-   */
+  const event: WorldEvent = {
+    id: `day_${world.day}_${actor.id}_${world.events.length}`,
+    day: world.day,
+    actorId: actor.id,
+    type: action.type,
+    description,
+  };
 
-  if (
-    action.action_type === "steal"
-  ) {
-    if (!targetObject) {
-      return {
-        ...action,
-        result: "failure",
-        consequence:
-          "Stealing requires an existing object."
-      };
-    }
+  world.events.push(event);
 
-    if (
-      targetObject.location.toLowerCase() !==
-      actor.location.toLowerCase()
-    ) {
-      return {
-        ...action,
-        result: "failure",
-        consequence:
-          `${targetObject.name} is not at ${actor.location}.`
-      };
-    }
-
-    if (
-      targetObject.destroyed
-    ) {
-      return {
-        ...action,
-        result: "failure",
-        consequence:
-          `${targetObject.name} has already been destroyed.`
-      };
-    }
-  }
-
-  /*
-   * DESTROY
-   */
-
-  if (
-    action.action_type === "destroy"
-  ) {
-    if (!targetObject) {
-      return {
-        ...action,
-        result: "failure",
-        consequence:
-          "Destroy requires an existing object."
-      };
-    }
-
-    if (
-      targetObject.location.toLowerCase() !==
-      actor.location.toLowerCase()
-    ) {
-      return {
-        ...action,
-        result: "failure",
-        consequence:
-          `${targetObject.name} is not at ${actor.location}.`
-      };
-    }
-  }
-
-  /*
-   * CONTACT
-   */
-
-  if (
-    action.action_type === "contact"
-  ) {
-    const resources =
-      (actor.resources || [])
-        .join(" ")
-        .toLowerCase();
-
-    if (
-      !(
-        resources.includes("phone") ||
-        resources.includes("smartphone") ||
-        resources.includes("laptop")
-      )
-    ) {
-      return {
-        ...action,
-        result: "failure",
-        consequence:
-          `${actor.name} has no known communication device.`
-      };
-    }
-
-    if (!targetCharacter) {
-      return {
-        ...action,
-        result: "failure",
-        consequence:
-          "Contact requires an existing character."
-      };
+  for (const knowledge of knowledgeGained) {
+    if (!actor.knowledge.includes(knowledge)) {
+      actor.knowledge.push(knowledge);
     }
   }
 
   return {
     ...action,
-    result: "success",
-    consequence:
-      `${actor.name} can perform this action.`
+    description,
+    knowledgeGained,
   };
 }
 
-/*
-=========================================================
-EXECUTION
-=========================================================
-*
-* IMPORTANT:
-*
-* This is the actual simulation.
-*
-* The LLM does not execute anything.
-*/
-
-function executeAction(
+function summarizeAction(
   world: WorldState,
-  action: ValidatedAction
-) {
-  if (
-    action.result === "failure"
-  ) {
-    return;
-  }
-
-  const actor =
-    findCharacter(
-      world,
-      action.actor
-    );
-
-  if (!actor) {
-    return;
-  }
-
-  const targetCharacter =
-    findCharacter(
-      world,
-      action.target
-    );
-
-  const targetEntity =
-    findEntity(
-      world,
-      action.target
-    );
-
-  const targetObject =
-    findObject(
-      world,
-      action.target
-    );
-
-  /*
-   * MOVE
-   */
-
-  if (
-    action.action_type === "move" &&
-    targetEntity?.type === "location"
-  ) {
-    actor.location =
-      targetEntity.name;
-
-    addEvent(
-      world,
-      `${actor.name} moved to ${targetEntity.name}.`
-    );
-
-    return;
-  }
-
-  /*
-   * FOLLOW
-   */
-
-  if (
-    action.action_type === "follow" &&
-    targetCharacter
-  ) {
-    actor.location =
-      targetCharacter.location;
-
-    addKnowledge(
-      actor,
-      `${targetCharacter.name} is at ${targetCharacter.location}.`
-    );
-
-    addEvent(
-      world,
-      `${actor.name} followed ${targetCharacter.name} to ${targetCharacter.location}.`
-    );
-
-    return;
-  }
-
-  /*
-   * OBSERVE
-   */
-
-  if (
-    action.action_type === "observe"
-  ) {
-    addKnowledge(
-      actor,
-      `Observed ${actor.location}.`
-    );
-
-    addEvent(
-      world,
-      `${actor.name} observed the surroundings at ${actor.location}.`
-    );
-
-    return;
-  }
-
-  /*
-   * TALK
-   */
-
-  if (
-    action.action_type === "talk" &&
-    targetCharacter
-  ) {
-    addKnowledge(
-      actor,
-      `${targetCharacter.name} was available to speak with at ${actor.location}.`
-    );
-
-    addEvent(
-      world,
-      `${actor.name} spoke with ${targetCharacter.name}.`
-    );
-
-    return;
-  }
-
-  /*
-   * CONFRONT
-   */
-
-  if (
-    action.action_type === "confront" &&
-    targetCharacter
-  ) {
-    addKnowledge(
-      actor,
-      `${targetCharacter.name} was confronted at ${actor.location}.`
-    );
-
-    addEvent(
-      world,
-      `${actor.name} confronted ${targetCharacter.name}.`
-    );
-
-    return;
-  }
-
-  /*
-   * LIE
-   */
-
-  if (
-    action.action_type === "lie" &&
-    targetCharacter
-  ) {
-    addEvent(
-      world,
-      `${actor.name} lied to ${targetCharacter.name}.`
-    );
-
-    return;
-  }
-
-  /*
-   * INVESTIGATE
-   */
-
-  if (
-    action.action_type ===
-      "investigate"
-  ) {
-    const target =
-      action.target ||
-      actor.location;
-
-    /*
-     * Investigation NEVER creates evidence.
-     *
-     * It only gives information about things
-     * that actually exist in the world.
-     */
-
-    const entity =
-      findEntity(
-        world,
-        target
-      );
-
-    const object =
-      findObject(
-        world,
-        target
-      );
-
-    const character =
-      findCharacter(
-        world,
-        target
-      );
-
-    if (entity) {
-      addKnowledge(
-        actor,
-        `Investigated ${entity.name}.`
-      );
-    } else if (object) {
-      addKnowledge(
-        actor,
-        `${object.name} exists at ${object.location}.`
-      );
-    } else if (character) {
-      addKnowledge(
-        actor,
-        `Investigated ${character.name}.`
-      );
-    } else {
-      addKnowledge(
-        actor,
-        `Investigated ${actor.location}.`
-      );
-    }
-
-    addEvent(
-      world,
-      `${actor.name} investigated ${target}.`
-    );
-
-    return;
-  }
-
-  /*
-   * SEARCH
-   */
-
-  if (
-    action.action_type === "search"
-  ) {
-    /*
-     * Searching a specific existing object.
-     */
-
-    if (targetObject) {
-      if (
-        targetObject.hidden &&
-        !(
-          targetObject.discoverable_by ||
-          []
-        ).some(
-          (name) =>
-            name.toLowerCase() ===
-            actor.name.toLowerCase()
-        )
-      ) {
-        addEvent(
-          world,
-          `${actor.name} searched ${targetObject.name} but did not discover it.`
-        );
-
-        return;
-      }
-
-      if (
-        !targetObject.destroyed
-      ) {
-        targetObject.known_by =
-          targetObject.known_by || [];
-
-        if (
-          !targetObject.known_by.includes(
-            actor.name
-          )
-        ) {
-          targetObject.known_by.push(
-            actor.name
-          );
-        }
-
-        addKnowledge(
-          actor,
-          `${targetObject.name} exists at ${targetObject.location}.`
-        );
-
-        addEvent(
-          world,
-          `${actor.name} searched ${targetObject.name}.`
-        );
-      }
-
-      return;
-    }
-
-    /*
-     * Searching an area does NOT create
-     * a mysterious object.
-     *
-     * It only reveals existing objects that
-     * are physically there and discoverable.
-     */
-
-    const nearbyObjects =
-      (world.objects || []).filter(
-        (object) =>
-          !object.destroyed &&
-          object.location.toLowerCase() ===
-            actor.location.toLowerCase() &&
-          (
-            !object.hidden ||
-            (
-              object.discoverable_by ||
-              []
-            ).some(
-              (name) =>
-                name.toLowerCase() ===
-                actor.name.toLowerCase()
-            )
-          )
-      );
-
-    for (
-      const object of nearbyObjects
-    ) {
-      object.known_by =
-        object.known_by || [];
-
-      if (
-        !object.known_by.includes(
-          actor.name
-        )
-      ) {
-        object.known_by.push(
-          actor.name
-        );
-
-        addKnowledge(
-          actor,
-          `Discovered ${object.name} at ${object.location}.`
-        );
-      }
-    }
-
-    if (
-      nearbyObjects.length === 0
-    ) {
-      addKnowledge(
-        actor,
-        `No known relevant object was found while searching ${actor.location}.`
-      );
-    }
-
-    addEvent(
-      world,
-      `${actor.name} searched ${actor.location}.`
-    );
-
-    return;
-  }
-
-  /*
-   * CONTACT
-   */
-
-  if (
-    action.action_type === "contact" &&
-    targetCharacter
-  ) {
-    addEvent(
-      world,
-      `${actor.name} contacted ${targetCharacter.name}.`
-    );
-
-    addKnowledge(
-      actor,
-      `${targetCharacter.name} can be contacted.`
-    );
-
-    return;
-  }
-
-  /*
-   * PROTECT
-   */
-
-  if (
-    action.action_type === "protect"
-  ) {
-    addEvent(
-      world,
-      `${actor.name} attempted to protect ${action.target || actor.name}.`
-    );
-
-    return;
-  }
-
-  /*
-   * WAIT
-   */
-
-  if (
-    action.action_type === "wait"
-  ) {
-    addEvent(
-      world,
-      `${actor.name} waited at ${actor.location}.`
-    );
-
-    return;
-  }
-
-  /*
-   * STEAL
-   */
-
-  if (
-    action.action_type === "steal" &&
-    targetObject
-  ) {
-    targetObject.owner =
-      actor.name;
-
-    targetObject.location =
-      actor.location;
-
-    targetObject.known_by =
-      targetObject.known_by || [];
-
-    if (
-      !targetObject.known_by.includes(
-        actor.name
-      )
-    ) {
-      targetObject.known_by.push(
-        actor.name
-      );
-    }
-
-    addKnowledge(
-      actor,
-      `I possess ${targetObject.name}.`
-    );
-
-    addEvent(
-      world,
-      `${actor.name} took ${targetObject.name}.`
-    );
-
-    return;
-  }
-
-  /*
-   * DESTROY
-   */
-
-  if (
-    action.action_type === "destroy" &&
-    targetObject
-  ) {
-    targetObject.destroyed = true;
-
-    addEvent(
-      world,
-      `${actor.name} destroyed ${targetObject.name}.`
-    );
-
-    return;
-  }
+  executed: ExecutedAction
+): string {
+  return executed.description;
 }
 
-/*
-=========================================================
-DETERMINISTIC DESCRIPTION
-=========================================================
-*
-* No LLM is used here.
-*
-* This means the model cannot invent:
-* - USB drives
-* - professors
-* - buildings
-* - money
-* - messages
-* - files
-* - organizations
-* - evidence
-* - surveillance
-* - etc.
-*/
+function buildSituation(world: WorldState): string {
+  const recentEvents = world.events
+    .filter((event) => event.day === world.day)
+    .slice(-6);
 
-function describeAction(
-  action: ValidatedAction
-): CharacterUpdate {
-  const success =
-    action.result !== "failure";
-
-  let knowledge = "";
-  let relationship = "";
-  let emotion = "";
-  let priority = "";
-
-  if (
-    action.action_type === "move"
-  ) {
-    knowledge =
-      `Moved to ${action.target}.`;
+  if (recentEvents.length === 0) {
+    return "The world is quiet. The characters continue pursuing their goals.";
   }
 
-  if (
-    action.action_type === "follow"
-  ) {
-    knowledge =
-      `Followed ${action.target}.`;
+  return recentEvents.map((event) => event.description).join(" ");
+}
+
+function buildNextTension(world: WorldState): string {
+  const priorities = world.characters
+    .map((character) => `${character.name}: ${character.currentPriority}`)
+    .join(" ");
+
+  return `The characters continue pursuing their own priorities. ${priorities}`;
+}
+
+function buildCharacterUpdate(
+  world: WorldState,
+  actor: Character,
+  executed: ExecutedAction
+) {
+  return {
+    name: actor.name,
+    action: summarizeAction(world, executed),
+    reason: actor.currentPriority,
+    newKnowledge: executed.knowledgeGained,
+    relationship: Object.values(actor.relationships)[0] ?? "",
+  };
+}
+
+function normalizeIncomingWorld(input: unknown): WorldState {
+  if (!input || typeof input !== "object") {
+    return createInitialWorld();
   }
 
-  if (
-    action.action_type === "observe"
-  ) {
-    knowledge =
-      `Observed the surroundings.`;
-  }
+  const candidate = input as Partial<WorldState>;
 
   if (
-    action.action_type === "search"
+    !Array.isArray(candidate.characters) ||
+    !Array.isArray(candidate.locations)
   ) {
-    knowledge =
-      success
-        ? "Searched for existing objects in the current location."
-        : "The search failed.";
-  }
-
-  if (
-    action.action_type ===
-      "investigate"
-  ) {
-    knowledge =
-      `Investigated ${action.target || "the current location"}.`;
-  }
-
-  if (
-    action.action_type === "talk"
-  ) {
-    knowledge =
-      `Spoke with ${action.target}.`;
-  }
-
-  if (
-    action.action_type ===
-      "confront"
-  ) {
-    knowledge =
-      `Confronted ${action.target}.`;
-  }
-
-  if (
-    action.action_type === "lie"
-  ) {
-    knowledge =
-      `Attempted to mislead ${action.target}.`;
-  }
-
-  if (
-    action.action_type ===
-      "contact"
-  ) {
-    knowledge =
-      `Contacted ${action.target}.`;
-  }
-
-  if (
-    action.action_type ===
-      "protect"
-  ) {
-    knowledge =
-      `Attempted to protect ${action.target || "themselves"}.`;
-  }
-
-  if (
-    action.action_type === "wait"
-  ) {
-    knowledge =
-      "Chose to wait.";
-  }
-
-  if (
-    action.action_type === "steal"
-  ) {
-    knowledge =
-      `Took ${action.target}.`;
-  }
-
-  if (
-    action.action_type ===
-      "destroy"
-  ) {
-    knowledge =
-      `Destroyed ${action.target}.`;
-  }
-
-  if (!success) {
-    knowledge =
-      action.consequence;
+    return createInitialWorld();
   }
 
   return {
-    name: action.actor,
-    action: action.description,
-    reason: action.reason,
-    new_knowledge: knowledge,
-    relationship_change: relationship,
-    emotional_change: emotion,
-    new_priority: priority
+    day: Number(candidate.day) || 1,
+    locations: candidate.locations,
+    characters: candidate.characters,
+    objects: Array.isArray(candidate.objects) ? candidate.objects : [],
+    events: Array.isArray(candidate.events) ? candidate.events : [],
   };
 }
 
-/*
-=========================================================
-SITUATION GENERATOR
-=========================================================
-*
-* IMPORTANT:
-*
-* This does NOT ask an LLM what happened.
-* It summarizes actual world state.
-*/
-
-function buildSituation(
-  world: WorldState,
-  events: string[]
-): string {
-  const locations =
-    world.characters.map(
-      (character) =>
-        `${character.name} is at ${character.location}`
-    );
-
-  if (events.length === 0) {
-    return (
-      world.situation ||
-      locations.join(". ") +
-        "."
-    );
-  }
-
-  return (
-    locations.join(". ") +
-    ". " +
-    events.slice(-3).join(" ")
-  );
-}
-
-/*
-=========================================================
-NEXT TENSION
-=========================================================
-*
-* This is deliberately conservative.
-* It does not invent future plot events.
-*/
-
-function buildNextTension(
-  world: WorldState
-): string {
-  const priorities =
-    world.characters
-      .map(
-        (character) =>
-          `${character.name}: ${character.current_priority}`
-      )
-      .join(" ");
-
-  return `The characters continue pursuing their existing priorities. ${priorities}`;
-}
-
-/*
-=========================================================
-POST
-=========================================================
-*/
-
-export async function POST(
-  request: Request
-) {
+export async function POST(request: NextRequest) {
   try {
-    if (
-      !process.env.GROQ_API_KEY
-    ) {
-      return NextResponse.json(
-        {
-          error:
-            "GROQ_API_KEY is not configured."
-        },
-        {
-          status: 500
-        }
-      );
-    }
+    const body = await request.json();
 
-    const body =
-      await request.json();
+    const incomingWorld = body?.world;
 
-    if (!body.world) {
-      return NextResponse.json(
-        {
-          error:
-            "A world state is required."
-        },
-        {
-          status: 400
-        }
-      );
-    }
-
-    let world =
-      normalizeWorld(
-        body.world as WorldState
-      );
+    const world = clone(normalizeIncomingWorld(incomingWorld));
 
     /*
-     * Intervention is intentionally NOT allowed
-     * to directly mutate the world.
+     * If no world was supplied, start from Day 1.
+     */
+    if (!incomingWorld) {
+      const initialWorld = createInitialWorld();
+
+      return NextResponse.json({
+        success: true,
+        world: initialWorld,
+        day: initialWorld.day,
+        situation: buildSituation(initialWorld),
+        timeline: initialWorld.events,
+        character_updates: [],
+        next_tension: buildNextTension(initialWorld),
+      });
+    }
+
+    /*
+     * Advance exactly ONE day.
+     */
+    world.day += 1;
+
+    const executedActions: ExecutedAction[] = [];
+
+    /*
+     * Each character acts once.
      *
-     * We will wire it into the same legal-action
-     * system later.
+     * Their choices are independent.
+     * The second character sees the world after the first
+     * character's action.
      */
-
-    if (
-      !Array.isArray(
-        world.characters
-      ) ||
-      !Array.isArray(
-        world.entities
-      ) ||
-      !Array.isArray(
-        world.events
-      )
-    ) {
-      return NextResponse.json(
-        {
-          error:
-            "Invalid world state."
-        },
-        {
-          status: 400
-        }
+    for (const actor of world.characters) {
+      const legal = validateActions(
+        world,
+        generateLegalActions(world, actor),
+        actor
       );
-    }
 
-    /*
-    =======================================================
-    STEP 1
-    ASK LLM FOR POSSIBLE ACTIONS
-    =======================================================
-    */
-
-    const candidatePrompt = `
-You are NOT a storyteller.
-
-You are a decision generator inside a CLOSED WORLD SIMULATOR.
-
-Your only job is to propose actions existing characters might take.
-
-WORLD:
-
-${JSON.stringify(
-  world,
-  null,
-  2
-)}
-
-ABSOLUTE RULES:
-
-1. You may ONLY use characters already in WORLD.
-
-2. You may ONLY target:
-   - existing characters
-   - existing locations
-   - existing organizations
-   - existing objects
-
-3. You are FORBIDDEN from inventing:
-   - people
-   - objects
-   - locations
-   - organizations
-   - money
-   - evidence
-   - documents
-   - USB drives
-   - files
-   - messages
-   - professors
-   - security
-   - cameras
-   - buildings
-   - meetings
-   - companies
-   - events
-
-4. Do not describe consequences.
-
-5. Do not create plot twists.
-
-6. Do not make something happen merely because it would make the story interesting.
-
-7. Characters can wait.
-
-8. Characters can fail.
-
-9. A character's secret is NOT automatically known by other characters.
-
-10. Use only the character's existing:
-    - goal
-    - fear
-    - priority
-    - personality
-    - knowledge
-    - capabilities
-    - resources
-    - relationships
-    - location
-
-For EVERY character, generate exactly THREE possible actions.
-
-Return ONLY valid JSON:
-
-{
-  "candidates": [
-    {
-      "actor": "existing character name",
-      "actions": [
-        {
-          "action_type": "observe | move | talk | investigate | search | protect | lie | follow | wait | contact | destroy | steal | confront",
-          "target": "existing target or empty string",
-          "description": "what the character attempts",
-          "reason": "why they attempt it"
-        },
-        {
-          "action_type": "...",
-          "target": "...",
-          "description": "...",
-          "reason": "..."
-        },
-        {
-          "action_type": "...",
-          "target": "...",
-          "description": "...",
-          "reason": "..."
-        }
-      ]
-    }
-  ]
-}
-`;
-
-    const candidateCompletion =
-      await groq.chat.completions.create({
-        model:
-          "openai/gpt-oss-120b",
-
-        temperature: 0.3,
-
-        response_format: {
-          type: "json_object"
-        },
-
-        messages: [
-          {
-            role: "system",
-            content:
-              "Generate legal candidate actions only. Never generate story events."
-          },
-          {
-            role: "user",
-            content:
-              candidatePrompt
-          }
-        ]
-      });
-
-    const candidateContent =
-      candidateCompletion
-        .choices[0]
-        ?.message
-        ?.content;
-
-    if (!candidateContent) {
-      throw new Error(
-        "Candidate engine returned no response."
-      );
-    }
-
-    const candidateData =
-      JSON.parse(
-        candidateContent
-      ) as CandidateResponse;
-
-    /*
-    =======================================================
-    BUILD CANDIDATES
-    =======================================================
-    */
-
-    const candidates:
-      ProposedAction[] = [];
-
-    for (
-      const group of
-      candidateData.candidates || []
-    ) {
-      const actor =
-        findCharacter(
-          world,
-          group.actor
-        );
-
-      if (
-        !actor ||
-        !Array.isArray(
-          group.actions
-        )
-      ) {
+      if (legal.length === 0) {
         continue;
       }
 
-      group.actions
-        .slice(0, 3)
-        .forEach(
-          (
-            action,
-            index
-          ) => {
-            candidates.push({
-              actor: actor.name,
+      const selected = await chooseAction(world, actor, legal);
 
-              action_type:
-                action.action_type,
-
-              target:
-                action.target?.trim() ||
-                "",
-
-              description:
-                action.description?.trim() ||
-                `${actor.name} chooses to ${action.action_type}.`,
-
-              reason:
-                action.reason?.trim() ||
-                "Consistent with the character's current state.",
-
-              candidate_id:
-                `${actor.id}-candidate-${index + 1}`,
-
-              source:
-                "character"
-            });
-          }
-        );
-    }
-
-    /*
-    =======================================================
-    VALIDATE CANDIDATES
-    =======================================================
-    */
-
-    const validatedCandidates =
-      candidates.map(
-        (candidate) =>
-          validateAction(
-            world,
-            candidate
-          )
+      /*
+       * Revalidate immediately before execution.
+       */
+      const stillLegal = validateActions(
+        world,
+        [selected],
+        actor
       );
 
-    /*
-    =======================================================
-    SELECT ONE ACTION PER CHARACTER
-    =======================================================
-    */
-
-    const selectionPrompt = `
-You are the ACTION SELECTOR for a closed-world simulator.
-
-Choose exactly ONE VALID action for each character.
-
-You are NOT allowed to invent an action.
-
-WORLD:
-
-${JSON.stringify(
-  world,
-  null,
-  2
-)}
-
-VALIDATED CANDIDATES:
-
-${JSON.stringify(
-  validatedCandidates,
-  null,
-  2
-)}
-
-Rules:
-
-- Use only candidate_id values provided.
-- Never invent candidate IDs.
-- Prefer actions consistent with the character's goals and current state.
-- Do not select failure actions.
-- Do not select an action just to create drama.
-- Waiting is completely valid.
-- Characters can make conservative choices.
-- Characters do not have to create a major event.
-
-Return ONLY:
-
-{
-  "selections": [
-    {
-      "actor": "existing character name",
-      "candidate_id": "existing candidate id"
-    }
-  ]
-}
-`;
-
-    const selectionCompletion =
-      await groq.chat.completions.create({
-        model:
-          "openai/gpt-oss-120b",
-
-        temperature: 0.15,
-
-        response_format: {
-          type: "json_object"
-        },
-
-        messages: [
-          {
-            role: "system",
-            content:
-              "Select existing valid candidates only."
-          },
-          {
-            role: "user",
-            content:
-              selectionPrompt
-          }
-        ]
-      });
-
-    const selectionContent =
-      selectionCompletion
-        .choices[0]
-        ?.message
-        ?.content;
-
-    if (!selectionContent) {
-      throw new Error(
-        "Selection engine returned no response."
-      );
-    }
-
-    const selectionData =
-      JSON.parse(
-        selectionContent
-      ) as SelectionResponse;
-
-    const candidateMap =
-      new Map<
-        string,
-        ProposedAction
-      >();
-
-    for (
-      const candidate of
-      candidates
-    ) {
-      if (
-        candidate.candidate_id
-      ) {
-        candidateMap.set(
-          candidate.candidate_id,
-          candidate
-        );
-      }
-    }
-
-    const selected =
-      new Map<
-        string,
-        ProposedAction
-      >();
-
-    /*
-     * Accept only selections that actually exist.
-     */
-
-    for (
-      const selection of
-      selectionData.selections || []
-    ) {
-      const candidate =
-        candidateMap.get(
-          selection.candidate_id
-        );
-
-      if (!candidate) {
+      if (stillLegal.length === 0) {
         continue;
       }
 
-      const actor =
-        findCharacter(
-          world,
-          candidate.actor
-        );
+      const executed = executeAction(world, stillLegal[0]);
+
+      executedActions.push(executed);
+    }
+
+    const characterUpdates = executedActions.map((executed) => {
+      const actor = findCharacter(world, executed.actorId);
 
       if (!actor) {
-        continue;
+        return null;
       }
 
-      if (
-        !selected.has(
-          actor.name
-        )
-      ) {
-        selected.set(
-          actor.name,
-          candidate
-        );
-      }
-    }
-
-    /*
-    =======================================================
-    DETERMINISTIC FALLBACK
-    =======================================================
-    *
-    * If the LLM fails to select an action,
-    * the character waits.
-    *
-    * NOT a new plot event.
-    */
-
-    for (
-      const character of
-      world.characters
-    ) {
-      if (
-        selected.has(
-          character.name
-        )
-      ) {
-        continue;
-      }
-
-      const validCandidate =
-        validatedCandidates.find(
-          (candidate) =>
-            candidate.actor ===
-              character.name &&
-            candidate.result ===
-              "success"
-        );
-
-      if (validCandidate) {
-        selected.set(
-          character.name,
-          validCandidate
-        );
-      } else {
-        selected.set(
-          character.name,
-          {
-            actor:
-              character.name,
-
-            action_type:
-              "wait",
-
-            target: "",
-
-            description:
-              `${character.name} waits at ${character.location}.`,
-
-            reason:
-              "No valid selected action was available.",
-
-            candidate_id:
-              `${character.id}-fallback-wait`,
-
-            source:
-              "character"
-          }
-        );
-      }
-    }
-
-    const proposedActions =
-      Array.from(
-        selected.values()
-      );
-
-    /*
-    =======================================================
-    FINAL VALIDATION
-    =======================================================
-    */
-
-    const validatedActions =
-      proposedActions.map(
-        (action) =>
-          validateAction(
-            world,
-            action
-          )
-      );
-
-    /*
-    =======================================================
-    EXECUTE ON A COPY
-    =======================================================
-    */
-
-    const updatedWorld =
-      structuredClone(world);
-
-    for (
-      const action of
-      validatedActions
-    ) {
-      executeAction(
-        updatedWorld,
-        action
-      );
-    }
-
-    /*
-    =======================================================
-    COLLECT ONLY REAL EVENTS
-    =======================================================
-    */
-
-    const newEvents =
-      updatedWorld.events.slice(
-        world.events.length
-      );
-
-    /*
-    =======================================================
-    CHARACTER SUMMARIES
-    =======================================================
-    */
-
-    const characterUpdates =
-      validatedActions.map(
-        describeAction
-      );
-
-    /*
-    =======================================================
-    ADVANCE DAY
-    =======================================================
-    */
-
-    updatedWorld.day =
-      world.day + 1;
-
-    /*
-    =======================================================
-    IMPORTANT:
-    DO NOT LET THE LLM REWRITE SITUATION.
-    =======================================================
-    */
-
-    updatedWorld.situation =
-      buildSituation(
-        updatedWorld,
-        newEvents
-      );
-
-    /*
-    =======================================================
-    NEXT TENSION
-    =======================================================
-    */
-
-    const nextTension =
-      buildNextTension(
-        updatedWorld
-      );
-
-    /*
-    =======================================================
-    FINAL RESPONSE
-    =======================================================
-    */
-
-    const result:
-      SimulationResult = {
-        day:
-          updatedWorld.day,
-
-        situation:
-          updatedWorld.situation,
-
-        proposed_actions:
-          proposedActions,
-
-        validated_actions:
-          validatedActions,
-
-        events:
-          newEvents,
-
-        character_updates:
-          characterUpdates,
-
-        new_situation:
-          updatedWorld.situation,
-
-        next_tension:
-          nextTension
-      };
+      return buildCharacterUpdate(world, actor, executed);
+    }).filter(Boolean);
 
     return NextResponse.json({
-      result,
-      world: updatedWorld
-    });
+      success: true,
 
+      day: world.day,
+
+      world,
+
+      situation: buildSituation(world),
+
+      timeline: world.events,
+
+      simulation_result:
+        executedActions.length > 0
+          ? executedActions.map((action) => action.description).join(" ")
+          : "No character action was executed.",
+
+      character_updates: characterUpdates,
+
+      next_tension: buildNextTension(world),
+    });
   } catch (error) {
-    console.error(
-      "Simulation error:",
-      error
-    );
+    console.error("Simulation error:", error);
 
     return NextResponse.json(
       {
+        success: false,
         error:
           error instanceof Error
             ? error.message
-            : "Simulation failed."
+            : "Simulation failed.",
       },
-      {
-        status: 500
-      }
+      { status: 500 }
     );
   }
 }
