@@ -1,8 +1,8 @@
-import {
+import type {
   ActionType,
   Character,
   WorldState,
-} from "./engine";
+} from "./types";
 
 import {
   MindState,
@@ -15,12 +15,9 @@ export type Decision = {
   score: number;
 };
 
-function clamp(value: number) {
-  return Math.max(
-    0,
-    Math.min(100, value)
-  );
-}
+/* =========================================================
+   HELPERS
+========================================================= */
 
 function hasCapability(
   character: Character,
@@ -81,7 +78,8 @@ function getNearbyCharacter(
 ) {
   return world.characters.find(
     (other) =>
-      other.id !== character.id &&
+      other.id !==
+        character.id &&
       sameLocation(
         character,
         other
@@ -89,10 +87,15 @@ function getNearbyCharacter(
   );
 }
 
+/* =========================================================
+   LEGAL ACTIONS
+========================================================= */
+
 function getLegalActions(
   world: WorldState,
   character: Character
 ): ActionType[] {
+
   const actions: ActionType[] = [
     "WAIT",
     "OBSERVE",
@@ -101,8 +104,14 @@ function getLegalActions(
   const location =
     world.locations.find(
       (item) =>
-        item.id === character.location
+        item.id ===
+        character.location
     );
+
+
+  /* -------------------------------------------------------
+     Investigation actions
+  ------------------------------------------------------- */
 
   if (
     hasCapability(
@@ -110,18 +119,33 @@ function getLegalActions(
       "investigation"
     )
   ) {
+
     actions.push(
       "INVESTIGATE",
       "SEARCH"
     );
   }
 
+
+  /* -------------------------------------------------------
+     Movement
+  ------------------------------------------------------- */
+
   if (
     location?.connectedTo &&
-    location.connectedTo.length > 0
+    location.connectedTo.length >
+      0
   ) {
-    actions.push("MOVE");
+
+    actions.push(
+      "MOVE"
+    );
   }
+
+
+  /* -------------------------------------------------------
+     Character interaction
+  ------------------------------------------------------- */
 
   const nearbyCharacter =
     getNearbyCharacter(
@@ -129,27 +153,40 @@ function getLegalActions(
       character
     );
 
-  if (nearbyCharacter) {
+  if (
+    nearbyCharacter
+  ) {
+
     actions.push(
       "TALK",
       "FOLLOW"
     );
   }
 
+
   return actions;
 }
+
+/* =========================================================
+   MOTIVE STRENGTH
+========================================================= */
 
 function getMotiveStrength(
   mind: MindState,
   type: string
 ) {
+
   return mind.motives
     .filter(
       (motive) =>
-        motive.type === type
+        motive.type ===
+        type
     )
     .reduce(
-      (total, motive) =>
+      (
+        total,
+        motive
+      ) =>
         Math.max(
           total,
           motive.strength
@@ -158,15 +195,20 @@ function getMotiveStrength(
     );
 }
 
+/* =========================================================
+   SCORE ACTION
+========================================================= */
+
 function scoreAction(
   world: WorldState,
   character: Character,
   mind: MindState,
   action: ActionType
 ): Decision {
+
   let score = 0;
 
-  let reasons: string[] = [];
+  const reasons: string[] = [];
 
   const nearbyCharacter =
     getNearbyCharacter(
@@ -180,17 +222,16 @@ function scoreAction(
       "zara"
     );
 
-  const daniel =
-    getCharacter(
-      world,
-      "daniel"
-    );
 
-  /*
-   * BASE BEHAVIOUR
-   */
+  /* =======================================================
+     WAIT
+  ======================================================= */
 
-  if (action === "WAIT") {
+  if (
+    action ===
+    "WAIT"
+  ) {
+
     score += 10;
 
     reasons.push(
@@ -198,7 +239,16 @@ function scoreAction(
     );
   }
 
-  if (action === "OBSERVE") {
+
+  /* =======================================================
+     OBSERVE
+  ======================================================= */
+
+  if (
+    action ===
+    "OBSERVE"
+  ) {
+
     score += 25;
 
     reasons.push(
@@ -206,23 +256,30 @@ function scoreAction(
     );
   }
 
-  /*
-   * INVESTIGATION
-   */
 
-  if (action === "INVESTIGATE") {
+  /* =======================================================
+     INVESTIGATE
+  ======================================================= */
+
+  if (
+    action ===
+    "INVESTIGATE"
+  ) {
+
     if (
       hasCapability(
         character,
         "investigation"
       )
     ) {
+
       score += 55;
 
       reasons.push(
         "Investigation directly supports the character's ability to understand the situation."
       );
     }
+
 
     const goalStrength =
       getMotiveStrength(
@@ -236,21 +293,29 @@ function scoreAction(
         "CURIOSITY"
       );
 
-    score +=
-      goalStrength * 0.45;
 
     score +=
-      curiosityStrength * 0.25;
+      goalStrength *
+      0.45;
+
+    score +=
+      curiosityStrength *
+      0.25;
+
 
     if (
-      world.evidence.length === 0
+      world.evidence.length ===
+      0
     ) {
+
       score += 20;
 
       reasons.push(
         "There is still no concrete evidence."
       );
+
     } else {
+
       score += 10;
 
       reasons.push(
@@ -258,9 +323,12 @@ function scoreAction(
       );
     }
 
+
     if (
-      character.id === "zara"
+      character.id ===
+      "zara"
     ) {
+
       score += 20;
 
       reasons.push(
@@ -269,19 +337,26 @@ function scoreAction(
     }
   }
 
-  /*
-   * SEARCH
-   */
 
-  if (action === "SEARCH") {
+  /* =======================================================
+     SEARCH
+  ======================================================= */
+
+  if (
+    action ===
+    "SEARCH"
+  ) {
+
     if (
       hasCapability(
         character,
         "investigation"
       )
     ) {
+
       score += 45;
     }
+
 
     const goalStrength =
       getMotiveStrength(
@@ -290,17 +365,23 @@ function scoreAction(
       );
 
     score +=
-      goalStrength * 0.3;
+      goalStrength *
+      0.3;
+
 
     if (
-      world.evidence.length === 0
+      world.evidence.length ===
+      0
     ) {
+
       score += 20;
 
       reasons.push(
         "Searching could produce the first useful clue."
       );
+
     } else {
+
       score += 15;
 
       reasons.push(
@@ -308,9 +389,12 @@ function scoreAction(
       );
     }
 
+
     if (
-      character.id === "zara"
+      character.id ===
+      "zara"
     ) {
+
       score += 15;
 
       reasons.push(
@@ -319,20 +403,32 @@ function scoreAction(
     }
   }
 
-  /*
-   * TALK
-   */
 
-  if (action === "TALK") {
+  /* =======================================================
+     TALK
+  ======================================================= */
+
+  if (
+    action ===
+    "TALK"
+  ) {
+
     score += 30;
 
-    if (!nearbyCharacter) {
-      score = -Infinity;
+
+    if (
+      !nearbyCharacter
+    ) {
+
+      score =
+        -Infinity;
 
       reasons.push(
         "There is nobody nearby to talk to."
       );
+
     } else {
+
       const relationship =
         getRelationship(
           character,
@@ -340,42 +436,56 @@ function scoreAction(
         );
 
       const suspicion =
-        relationship?.suspicion ?? 0;
+        relationship?.suspicion ??
+        0;
 
       const trust =
-        relationship?.trust ?? 0;
+        relationship?.trust ??
+        0;
 
-      /*
-       * Zara becomes more interested
-       * in talking when suspicion rises.
-       */
+
+      /* ---------------------------------------------------
+         Zara
+      --------------------------------------------------- */
 
       if (
-        character.id === "zara"
+        character.id ===
+        "zara"
       ) {
-        score +=
-          suspicion * 0.65;
 
         score +=
-          trust * 0.15;
+          suspicion *
+          0.65;
+
+        score +=
+          trust *
+          0.15;
+
 
         if (
-          suspicion >= 70
+          suspicion >=
+          70
         ) {
+
           score += 20;
 
           reasons.push(
             `${nearbyCharacter.name}'s behaviour has become suspicious enough to justify questioning them.`
           );
+
         } else if (
-          suspicion >= 50
+          suspicion >=
+          50
         ) {
+
           score += 10;
 
           reasons.push(
             `${nearbyCharacter.name} may know something useful.`
           );
+
         } else {
+
           score += 5;
 
           reasons.push(
@@ -384,19 +494,24 @@ function scoreAction(
         }
       }
 
-      /*
-       * Daniel's willingness to talk
-       * decreases as exposure risk rises.
-       */
+
+      /* ---------------------------------------------------
+         Daniel
+      --------------------------------------------------- */
 
       if (
-        character.id === "daniel"
+        character.id ===
+        "daniel"
       ) {
+
         score +=
-          trust * 0.25;
+          trust *
+          0.25;
 
         score -=
-          suspicion * 0.55;
+          suspicion *
+          0.55;
+
 
         const selfPreservation =
           getMotiveStrength(
@@ -405,19 +520,26 @@ function scoreAction(
           );
 
         score -=
-          selfPreservation * 0.2;
+          selfPreservation *
+          0.2;
+
 
         if (
-          suspicion >= 70
+          suspicion >=
+          70
         ) {
+
           score -= 25;
 
           reasons.push(
             "Daniel fears that talking could expose what he knows."
           );
+
         } else if (
-          trust >= 60
+          trust >=
+          60
         ) {
+
           score += 15;
 
           reasons.push(
@@ -428,18 +550,29 @@ function scoreAction(
     }
   }
 
-  /*
-   * FOLLOW
-   */
 
-  if (action === "FOLLOW") {
-    if (!nearbyCharacter) {
-      score = -Infinity;
+  /* =======================================================
+     FOLLOW
+  ======================================================= */
+
+  if (
+    action ===
+    "FOLLOW"
+  ) {
+
+    if (
+      !nearbyCharacter
+    ) {
+
+      score =
+        -Infinity;
 
       reasons.push(
         "There is nobody nearby to follow."
       );
+
     } else {
+
       const relationship =
         getRelationship(
           character,
@@ -447,33 +580,50 @@ function scoreAction(
         );
 
       const suspicion =
-        relationship?.suspicion ?? 0;
+        relationship?.suspicion ??
+        0;
+
+
+      /* ---------------------------------------------------
+         Zara
+      --------------------------------------------------- */
 
       if (
-        character.id === "zara"
+        character.id ===
+        "zara"
       ) {
+
         score += 20;
 
         score +=
-          suspicion * 0.85;
+          suspicion *
+          0.85;
+
 
         if (
-          suspicion >= 70
+          suspicion >=
+          70
         ) {
+
           score += 30;
 
           reasons.push(
             "Zara's high suspicion makes following increasingly attractive."
           );
+
         } else if (
-          suspicion >= 50
+          suspicion >=
+          50
         ) {
+
           score += 15;
 
           reasons.push(
             "Zara has enough suspicion to consider following."
           );
+
         } else {
+
           score -= 15;
 
           reasons.push(
@@ -482,9 +632,16 @@ function scoreAction(
         }
       }
 
+
+      /* ---------------------------------------------------
+         Daniel
+      --------------------------------------------------- */
+
       if (
-        character.id === "daniel"
+        character.id ===
+        "daniel"
       ) {
+
         score -= 25;
 
         reasons.push(
@@ -494,20 +651,32 @@ function scoreAction(
     }
   }
 
-  /*
-   * MOVE
-   */
 
-  if (action === "MOVE") {
+  /* =======================================================
+     MOVE
+  ======================================================= */
+
+  if (
+    action ===
+    "MOVE"
+  ) {
+
     score += 25;
 
     reasons.push(
       "Moving creates access to different people and information."
     );
 
+
+    /* ---------------------------------------------------
+       Zara
+    --------------------------------------------------- */
+
     if (
-      character.id === "zara"
+      character.id ===
+      "zara"
     ) {
+
       const goalStrength =
         getMotiveStrength(
           mind,
@@ -515,11 +684,15 @@ function scoreAction(
         );
 
       score +=
-        goalStrength * 0.15;
+        goalStrength *
+        0.15;
+
 
       if (
-        world.evidence.length > 0
+        world.evidence.length >
+        0
       ) {
+
         score += 15;
 
         reasons.push(
@@ -528,9 +701,16 @@ function scoreAction(
       }
     }
 
+
+    /* ---------------------------------------------------
+       Daniel
+    --------------------------------------------------- */
+
     if (
-      character.id === "daniel"
+      character.id ===
+      "daniel"
     ) {
+
       const relationship =
         zara
           ? getRelationship(
@@ -540,18 +720,24 @@ function scoreAction(
           : undefined;
 
       const suspicion =
-        relationship?.suspicion ?? 0;
+        relationship?.suspicion ??
+        0;
+
 
       if (
-        suspicion >= 55
+        suspicion >=
+        55
       ) {
+
         score +=
-          suspicion * 0.45;
+          suspicion *
+          0.45;
 
         reasons.push(
           "Daniel wants distance when he feels Zara is becoming suspicious."
         );
       }
+
 
       const selfPreservation =
         getMotiveStrength(
@@ -560,13 +746,15 @@ function scoreAction(
         );
 
       score +=
-        selfPreservation * 0.15;
+        selfPreservation *
+        0.15;
     }
   }
 
-  /*
-   * RECENT REPETITION
-   */
+
+  /* =======================================================
+     REPETITION PENALTY
+  ======================================================= */
 
   if (
     recentlyDid(
@@ -574,6 +762,7 @@ function scoreAction(
       action
     )
   ) {
+
     score -= 30;
 
     reasons.push(
@@ -581,30 +770,33 @@ function scoreAction(
     );
   }
 
-  /*
-   * REPEATED ACTION PATTERNS
-   */
 
   const recentCount =
     character.recentActions.filter(
       (recentAction) =>
-        recentAction === action
+        recentAction ===
+        action
     ).length;
 
+
   if (
-    recentCount >= 2
+    recentCount >=
+    2
   ) {
+
     score -=
-      recentCount * 10;
+      recentCount *
+      10;
 
     reasons.push(
       "Repeated behaviour is becoming less attractive."
     );
   }
 
-  /*
-   * SELF-PRESERVATION
-   */
+
+  /* =======================================================
+     SELF PRESERVATION
+  ======================================================= */
 
   const selfPreservation =
     getMotiveStrength(
@@ -612,13 +804,19 @@ function scoreAction(
       "SELF_PRESERVATION"
     );
 
+
   if (
-    selfPreservation >= 80
+    selfPreservation >=
+    80
   ) {
+
     if (
-      action === "FOLLOW" ||
-      action === "INVESTIGATE"
+      action ===
+        "FOLLOW" ||
+      action ===
+        "INVESTIGATE"
     ) {
+
       score -= 15;
 
       reasons.push(
@@ -626,10 +824,14 @@ function scoreAction(
       );
     }
 
+
     if (
-      action === "OBSERVE" ||
-      action === "MOVE"
+      action ===
+        "OBSERVE" ||
+      action ===
+        "MOVE"
     ) {
+
       score += 10;
 
       reasons.push(
@@ -638,9 +840,10 @@ function scoreAction(
     }
   }
 
-  /*
-   * PROTECTION
-   */
+
+  /* =======================================================
+     PROTECTION
+  ======================================================= */
 
   const protection =
     getMotiveStrength(
@@ -648,13 +851,19 @@ function scoreAction(
       "PROTECTION"
     );
 
+
   if (
-    protection >= 80
+    protection >=
+    80
   ) {
+
     if (
-      action === "WAIT" ||
-      action === "OBSERVE"
+      action ===
+        "WAIT" ||
+      action ===
+        "OBSERVE"
     ) {
+
       score += 8;
 
       reasons.push(
@@ -663,9 +872,10 @@ function scoreAction(
     }
   }
 
-  /*
-   * CURIOSITY
-   */
+
+  /* =======================================================
+     CURIOSITY
+  ======================================================= */
 
   const curiosity =
     getMotiveStrength(
@@ -673,14 +883,21 @@ function scoreAction(
       "CURIOSITY"
     );
 
+
   if (
-    curiosity >= 70
+    curiosity >=
+    70
   ) {
+
     if (
-      action === "INVESTIGATE" ||
-      action === "SEARCH" ||
-      action === "OBSERVE"
+      action ===
+        "INVESTIGATE" ||
+      action ===
+        "SEARCH" ||
+      action ===
+        "OBSERVE"
     ) {
+
       score += 10;
 
       reasons.push(
@@ -689,9 +906,10 @@ function scoreAction(
     }
   }
 
-  /*
-   * LOYALTY
-   */
+
+  /* =======================================================
+     LOYALTY
+  ======================================================= */
 
   const loyalty =
     getMotiveStrength(
@@ -699,10 +917,14 @@ function scoreAction(
       "LOYALTY"
     );
 
+
   if (
-    loyalty >= 70 &&
-    action === "TALK"
+    loyalty >=
+      70 &&
+    action ===
+      "TALK"
   ) {
+
     score += 5;
 
     reasons.push(
@@ -710,9 +932,10 @@ function scoreAction(
     );
   }
 
-  /*
-   * FEAR
-   */
+
+  /* =======================================================
+     FEAR
+  ======================================================= */
 
   const fear =
     getMotiveStrength(
@@ -720,13 +943,19 @@ function scoreAction(
       "FEAR"
     );
 
+
   if (
-    fear >= 80
+    fear >=
+    80
   ) {
+
     if (
-      action === "FOLLOW" ||
-      action === "INVESTIGATE"
+      action ===
+        "FOLLOW" ||
+      action ===
+        "INVESTIGATE"
     ) {
+
       score -= 10;
 
       reasons.push(
@@ -734,61 +963,78 @@ function scoreAction(
       );
     }
 
+
     if (
-      action === "WAIT"
+      action ===
+      "WAIT"
     ) {
+
       score += 5;
     }
   }
 
-  /*
-   * MAKE SURE THE SCORE
-   * IS ALWAYS USABLE.
-   */
+
+  /* =======================================================
+     FINAL SCORE
+  ======================================================= */
 
   if (
-    score !== -Infinity
+    score !==
+    -Infinity
   ) {
-    score = Math.round(
-      score
-    );
+
+    score =
+      Math.round(
+        score
+      );
   }
 
-  /*
-   * FALLBACK REASON
-   */
 
   if (
-    reasons.length === 0
+    reasons.length ===
+    0
   ) {
+
     reasons.push(
       "The action is currently the most useful legal option."
     );
   }
 
+
   return {
     action,
+
     reason:
-      reasons.join(" "),
+      reasons.join(
+        " "
+      ),
+
     score,
   };
 }
+
+/* =========================================================
+   CHOOSE ONE ACTION
+========================================================= */
 
 export function chooseAction(
   world: WorldState,
   character: Character
 ): Decision {
+
   const mind =
     buildMindState(
       world,
       character
     );
 
+
   const legalActions =
     getLegalActions(
       world,
       character
     );
+
 
   const decisions =
     legalActions.map(
@@ -801,29 +1047,45 @@ export function chooseAction(
         )
     );
 
+
   decisions.sort(
     (a, b) =>
-      b.score - a.score
+      b.score -
+      a.score
   );
+
 
   return decisions[0];
 }
 
+/* =========================================================
+   CHOOSE ACTIONS FOR ALL CHARACTERS
+========================================================= */
+
 export function chooseActions(
   world: WorldState
 ) {
+
   const decisions: Record<
     string,
     Decision
   > = {};
 
-  for (const character of world.characters) {
-    decisions[character.id] =
+
+  for (
+    const character
+    of world.characters
+  ) {
+
+    decisions[
+      character.id
+    ] =
       chooseAction(
         world,
         character
       );
   }
+
 
   return decisions;
 }
