@@ -1,60 +1,27 @@
 import { processPerceptions } from "./perception";
 import { chooseAction } from "./decisions";
 
-export type ActionType =
-  | "OBSERVE"
-  | "MOVE"
-  | "FOLLOW"
-  | "TALK"
-  | "INVESTIGATE"
-  | "SEARCH"
-  | "WAIT";
+import type {
+  ActionType,
+  Character,
+  Location,
+  Relationship,
+  WorldState,
+} from "./types";
 
-export type Relationship = {
-  targetId: string;
-  trust: number;
-  suspicion: number;
-};
+export type {
+  ActionType,
+  Character,
+  Location,
+  Relationship,
+  WorldState,
+} from "./types";
 
-export type Character = {
-  id: string;
-  name: string;
-  role: string;
-  goal: string;
-  fear: string;
-  secret: string;
-  knowledge: string[];
-  capabilities: string[];
-  resources: string[];
-  location: string;
-  emotionalState: string;
-  currentPriority: string;
-  relationships: Relationship[];
-  recentActions: ActionType[];
-};
-
-export type Location = {
-  id: string;
-  name: string;
-  description: string;
-  connectedTo: string[];
-};
-
-export type WorldState = {
-  day: number;
-  location: string;
-  situation: string;
-  characters: Character[];
-  locations: Location[];
-  entities: string[];
-  objects: string[];
-  evidence: string[];
-  events: string[];
-};
-
-type SimulationResult = {
+export type SimulationResult = {
   world: WorldState;
+
   events: string[];
+
   characterUpdates: Record<
     string,
     {
@@ -62,20 +29,29 @@ type SimulationResult = {
       reason: string;
     }
   >;
+
   nextTension: string;
+
   interventionEffect: string;
 };
 
 const MAX_RECENT_ACTIONS = 5;
 
+/* =========================================================
+   HELPERS
+========================================================= */
+
 function hasCapability(
   character: Character,
   capability: string
 ) {
-  return character.capabilities.some((item) =>
-    item
-      .toLowerCase()
-      .includes(capability.toLowerCase())
+  return character.capabilities.some(
+    (item) =>
+      item
+        .toLowerCase()
+        .includes(
+          capability.toLowerCase()
+        )
   );
 }
 
@@ -94,7 +70,8 @@ function findCharacter(
   id: string
 ) {
   return world.characters.find(
-    (character) => character.id === id
+    (character) =>
+      character.id === id
   );
 }
 
@@ -103,7 +80,8 @@ function findLocation(
   id: string
 ) {
   return world.locations.find(
-    (location) => location.id === id
+    (location) =>
+      location.id === id
   );
 }
 
@@ -117,11 +95,16 @@ function getRelationship(
   );
 }
 
+/* =========================================================
+   INITIAL WORLD
+========================================================= */
+
 export function createInitialWorld(): WorldState {
   return {
     day: 1,
 
-    location: "University of Lagos",
+    location:
+      "University of Lagos",
 
     situation:
       "Zara suspects that a mysterious technology company is privately recruiting students.",
@@ -129,7 +112,8 @@ export function createInitialWorld(): WorldState {
     locations: [
       {
         id: "campus",
-        name: "University of Lagos Campus",
+        name:
+          "University of Lagos Campus",
         description:
           "A busy university campus where students move between lectures, meetings and social spaces.",
         connectedTo: [
@@ -140,26 +124,35 @@ export function createInitialWorld(): WorldState {
 
       {
         id: "campus-cafe",
-        name: "Campus Café",
+        name:
+          "Campus Café",
         description:
           "A crowded café where students regularly meet and talk.",
-        connectedTo: ["campus"],
+        connectedTo: [
+          "campus",
+        ],
       },
 
       {
         id: "company-office",
-        name: "Company Office",
+        name:
+          "Company Office",
         description:
           "A private office used by the mysterious technology company.",
-        connectedTo: ["campus"],
+        connectedTo: [
+          "campus",
+        ],
       },
     ],
 
     characters: [
       {
         id: "zara",
+
         name: "Zara",
-        role: "Student investigator",
+
+        role:
+          "Student investigator",
 
         goal:
           "Discover what the company is doing and whether students are being harmed.",
@@ -189,7 +182,8 @@ export function createInitialWorld(): WorldState {
           "student contacts",
         ],
 
-        location: "campus",
+        location:
+          "campus",
 
         emotionalState:
           "Suspicious but determined",
@@ -199,8 +193,11 @@ export function createInitialWorld(): WorldState {
 
         relationships: [
           {
-            targetId: "daniel",
+            targetId:
+              "daniel",
+
             trust: 45,
+
             suspicion: 55,
           },
         ],
@@ -210,8 +207,11 @@ export function createInitialWorld(): WorldState {
 
       {
         id: "daniel",
+
         name: "Daniel",
-        role: "Student and company contact",
+
+        role:
+          "Student and company contact",
 
         goal:
           "Protect his family while maintaining his financial opportunity.",
@@ -241,7 +241,8 @@ export function createInitialWorld(): WorldState {
           "student contacts",
         ],
 
-        location: "campus",
+        location:
+          "campus",
 
         emotionalState:
           "Conflicted and afraid",
@@ -251,8 +252,11 @@ export function createInitialWorld(): WorldState {
 
         relationships: [
           {
-            targetId: "zara",
+            targetId:
+              "zara",
+
             trust: 60,
+
             suspicion: 40,
           },
         ],
@@ -280,6 +284,10 @@ export function createInitialWorld(): WorldState {
   };
 }
 
+/* =========================================================
+   NORMALIZE WORLD
+========================================================= */
+
 export function normalizeWorld(
   input: any
 ): WorldState {
@@ -306,61 +314,84 @@ export function normalizeWorld(
         ? input.situation
         : "",
 
-    characters: input.characters.map(
-      (character: any) => ({
-        ...character,
+    characters:
+      input.characters.map(
+        (character: any) => ({
+          ...character,
 
-        knowledge: Array.isArray(
-          character.knowledge
-        )
-          ? character.knowledge
-          : [],
+          knowledge:
+            Array.isArray(
+              character.knowledge
+            )
+              ? character.knowledge
+              : [],
 
-        capabilities: Array.isArray(
-          character.capabilities
-        )
-          ? character.capabilities
-          : [],
+          capabilities:
+            Array.isArray(
+              character.capabilities
+            )
+              ? character.capabilities
+              : [],
 
-        resources: Array.isArray(
-          character.resources
-        )
-          ? character.resources
-          : [],
+          resources:
+            Array.isArray(
+              character.resources
+            )
+              ? character.resources
+              : [],
 
-        relationships: Array.isArray(
-          character.relationships
-        )
-          ? character.relationships
-          : [],
+          relationships:
+            Array.isArray(
+              character.relationships
+            )
+              ? character.relationships
+              : [],
 
-        recentActions: Array.isArray(
-          character.recentActions
-        )
-          ? character.recentActions
-          : [],
-      })
-    ),
+          recentActions:
+            Array.isArray(
+              character.recentActions
+            )
+              ? character.recentActions
+              : [],
+        })
+      ),
 
-    locations: input.locations,
+    locations:
+      input.locations,
 
-    entities: Array.isArray(input.entities)
-      ? input.entities
-      : [],
+    entities:
+      Array.isArray(
+        input.entities
+      )
+        ? input.entities
+        : [],
 
-    objects: Array.isArray(input.objects)
-      ? input.objects
-      : [],
+    objects:
+      Array.isArray(
+        input.objects
+      )
+        ? input.objects
+        : [],
 
-    evidence: Array.isArray(input.evidence)
-      ? input.evidence
-      : [],
+    evidence:
+      Array.isArray(
+        input.evidence
+      )
+        ? input.evidence
+        : [],
 
-    events: Array.isArray(input.events)
-      ? input.events
-      : [],
+    events:
+      Array.isArray(
+        input.events
+      )
+        ? input.events
+        : [],
   };
 }
+
+/* =========================================================
+   ACTION EXECUTION
+========================================================= */
 
 function executeAction(
   world: WorldState,
@@ -368,16 +399,33 @@ function executeAction(
   action: ActionType
 ): string {
   switch (action) {
+
+    /* -----------------------------------------------------
+       WAIT
+    ----------------------------------------------------- */
+
     case "WAIT":
       return `${character.name} waits and watches the situation develop.`;
 
+
+    /* -----------------------------------------------------
+       OBSERVE
+    ----------------------------------------------------- */
+
     case "OBSERVE":
+
       character.emotionalState =
         "Alert and observant";
 
       return `${character.name} observes the surroundings carefully.`;
 
+
+    /* -----------------------------------------------------
+       MOVE
+    ----------------------------------------------------- */
+
     case "MOVE": {
+
       const location =
         findLocation(
           world,
@@ -411,6 +459,7 @@ function executeAction(
         nextLocation ===
           "company-office"
       ) {
+
         character.currentPriority =
           "Maintain contact with the company without attracting attention.";
 
@@ -424,11 +473,18 @@ function executeAction(
       }.`;
     }
 
+
+    /* -----------------------------------------------------
+       TALK
+    ----------------------------------------------------- */
+
     case "TALK": {
+
       const target =
         world.characters.find(
           (other) =>
-            other.id !== character.id &&
+            other.id !==
+              character.id &&
             other.location ===
               character.location
         );
@@ -437,7 +493,11 @@ function executeAction(
         return `${character.name} wants to talk but nobody is nearby.`;
       }
 
-      if (character.id === "daniel") {
+      if (
+        character.id ===
+        "daniel"
+      ) {
+
         const relationship =
           getRelationship(
             character,
@@ -445,17 +505,23 @@ function executeAction(
           );
 
         if (relationship) {
+
           relationship.suspicion =
             Math.min(
               100,
-              relationship.suspicion + 5
+              relationship.suspicion +
+                5
             );
         }
 
         return `${character.name} talks with ${target.name} but carefully avoids revealing his agreement with the company.`;
       }
 
-      if (character.id === "zara") {
+      if (
+        character.id ===
+        "zara"
+      ) {
+
         const relationship =
           getRelationship(
             character,
@@ -463,10 +529,12 @@ function executeAction(
           );
 
         if (relationship) {
+
           relationship.suspicion =
             Math.min(
               100,
-              relationship.suspicion + 5
+              relationship.suspicion +
+                5
             );
         }
 
@@ -476,11 +544,18 @@ function executeAction(
       return `${character.name} talks with ${target.name}.`;
     }
 
+
+    /* -----------------------------------------------------
+       FOLLOW
+    ----------------------------------------------------- */
+
     case "FOLLOW": {
+
       const target =
         world.characters.find(
           (other) =>
-            other.id !== character.id &&
+            other.id !==
+              character.id &&
             other.location ===
               character.location
         );
@@ -496,17 +571,25 @@ function executeAction(
         );
 
       if (relationship) {
+
         relationship.suspicion =
           Math.min(
             100,
-            relationship.suspicion + 10
+            relationship.suspicion +
+              10
           );
       }
 
       return `${character.name} quietly follows ${target.name}.`;
     }
 
+
+    /* -----------------------------------------------------
+       INVESTIGATE
+    ----------------------------------------------------- */
+
     case "INVESTIGATE": {
+
       if (
         !hasCapability(
           character,
@@ -524,6 +607,7 @@ function executeAction(
           newEvidence
         )
       ) {
+
         world.evidence.push(
           newEvidence
         );
@@ -533,6 +617,7 @@ function executeAction(
             newEvidence
           )
         ) {
+
           character.knowledge.push(
             newEvidence
           );
@@ -550,7 +635,13 @@ function executeAction(
       return `${character.name} investigates further but finds no new evidence.`;
     }
 
+
+    /* -----------------------------------------------------
+       SEARCH
+    ----------------------------------------------------- */
+
     case "SEARCH": {
+
       const newKnowledge =
         "Something about the current location suggests the company has been using the area to meet students.";
 
@@ -559,6 +650,7 @@ function executeAction(
           newKnowledge
         )
       ) {
+
         character.knowledge.push(
           newKnowledge
         );
@@ -572,10 +664,15 @@ function executeAction(
   }
 }
 
+/* =========================================================
+   INTERVENTION
+========================================================= */
+
 function applyIntervention(
   world: WorldState,
   intervention: string
 ): string {
+
   if (!intervention) {
     return "";
   }
@@ -587,6 +684,7 @@ function applyIntervention(
     text.includes("zara") &&
     text.includes("daniel")
   ) {
+
     const zara =
       findCharacter(
         world,
@@ -594,6 +692,7 @@ function applyIntervention(
       );
 
     if (zara) {
+
       zara.currentPriority =
         "Pay closer attention to Daniel's behaviour.";
     }
@@ -604,6 +703,7 @@ function applyIntervention(
   if (
     text.includes("company")
   ) {
+
     const zara =
       findCharacter(
         world,
@@ -611,6 +711,7 @@ function applyIntervention(
       );
 
     if (zara) {
+
       zara.currentPriority =
         "Find out what the company is hiding.";
     }
@@ -621,25 +722,48 @@ function applyIntervention(
   return "The intervention becomes part of the characters' circumstances without directly controlling their actions.";
 }
 
+/* =========================================================
+   SIMULATE DAY
+========================================================= */
+
 export function simulateDay(
   world: WorldState,
   intervention: string
 ): SimulationResult {
+
   const events: string[] = [];
+
+  /*
+   * Advance the world by one day.
+   */
 
   world.day += 1;
 
+
+  /*
+   * Record intervention as part of
+   * the world's history.
+   */
+
   if (intervention) {
+
     world.events.push(
       `Intervention: ${intervention}`
     );
   }
+
+
+  /*
+   * Apply intervention before
+   * characters make their decisions.
+   */
 
   const interventionEffect =
     applyIntervention(
       world,
       intervention
     );
+
 
   const characterUpdates: Record<
     string,
@@ -649,13 +773,19 @@ export function simulateDay(
     }
   > = {};
 
+
   /*
    * PHASE 1
    *
-   * Each character evaluates the current
-   * world using their own mind state.
+   * Each character evaluates the
+   * current world and chooses an action.
    */
-  for (const character of world.characters) {
+
+  for (
+    const character
+    of world.characters
+  ) {
+
     const decision =
       chooseAction(
         world,
@@ -665,9 +795,17 @@ export function simulateDay(
     characterUpdates[
       character.id
     ] = {
-      action: decision.action,
-      reason: decision.reason,
+      action:
+        decision.action,
+
+      reason:
+        decision.reason,
     };
+
+
+    /*
+     * Execute the chosen action.
+     */
 
     const event =
       executeAction(
@@ -676,48 +814,68 @@ export function simulateDay(
         decision.action
       );
 
+
+    /*
+     * Remember the action so the
+     * character can react to their
+     * own recent behaviour later.
+     */
+
     rememberAction(
       character,
       decision.action
     );
 
-    events.push(event);
+
+    events.push(
+      event
+    );
+
 
     world.events.push(
       `Day ${world.day}: ${event}`
     );
   }
 
+
   /*
    * PHASE 2
    *
-   * Characters perceive the consequences
-   * of what happened.
+   * Characters perceive what happened.
    */
+
   const perceptions =
     processPerceptions(
       world,
       events
     );
 
+
   /*
    * PHASE 3
    *
-   * Store those interpretations in the
+   * Store interpretations as
    * persistent world history.
    */
-  for (const perception of perceptions) {
+
+  for (
+    const perception
+    of perceptions
+  ) {
+
     world.events.push(
       `Day ${world.day}: ${perception.characterId} perceives: ${perception.interpretation}`
     );
   }
 
+
   /*
-   * The public situation describes
-   * what actually happened.
+   * Public world situation.
    */
+
   world.situation =
     events.join(" ");
+
 
   const zara =
     findCharacter(
@@ -731,42 +889,67 @@ export function simulateDay(
       "daniel"
     );
 
+
   let nextTension =
     "The characters continue pursuing their own goals.";
 
-  if (zara && daniel) {
+
+  /*
+   * Calculate the next tension based
+   * on the actual state of the world.
+   */
+
+  if (
+    zara &&
+    daniel
+  ) {
+
     const relationship =
       getRelationship(
         zara,
         "daniel"
       );
 
+
     if (
       relationship &&
-      relationship.suspicion >= 70
+      relationship.suspicion >=
+        70
     ) {
+
       nextTension =
         "Zara's suspicion of Daniel is becoming difficult to hide.";
+
     } else if (
-      world.evidence.length > 0 &&
+      world.evidence.length >
+        0 &&
       zara.location ===
         daniel.location
     ) {
+
       nextTension =
         "Zara has evidence, Daniel is hiding information, and they are now in the same place.";
+
     } else if (
-      world.evidence.length > 0
+      world.evidence.length >
+        0
     ) {
+
       nextTension =
         "Zara has evidence but Daniel is no longer nearby.";
     }
   }
 
+
   return {
     world,
+
     events,
+
     characterUpdates,
+
     nextTension,
+
     interventionEffect,
   };
-}
+  }
