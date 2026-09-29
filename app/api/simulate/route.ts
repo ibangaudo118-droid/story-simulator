@@ -4,7 +4,9 @@ import Groq from "groq-sdk";
 export const runtime = "nodejs";
 
 type Character = {
+  id: string;
   name: string;
+  role: string;
   personality: string;
   goal: string;
   fear: string;
@@ -15,6 +17,15 @@ type Character = {
   knowledge: string[];
   capabilities: string[];
   resources: string[];
+  location: string;
+};
+
+type WorldEntity = {
+  id: string;
+  name: string;
+  type: "person" | "organization" | "location";
+  description: string;
+  location?: string;
 };
 
 type WorldState = {
@@ -22,6 +33,7 @@ type WorldState = {
   location: string;
   situation: string;
   characters: Character[];
+  entities: WorldEntity[];
   events: string[];
 };
 
@@ -43,8 +55,12 @@ export async function POST(request: Request) {
   try {
     if (!process.env.GROQ_API_KEY) {
       return NextResponse.json(
-        { error: "GROQ_API_KEY is not configured." },
-        { status: 500 }
+        {
+          error: "GROQ_API_KEY is not configured."
+        },
+        {
+          status: 500
+        }
       );
     }
 
@@ -57,22 +73,33 @@ export async function POST(request: Request) {
         ? body.intervention.trim()
         : "";
 
-    if (!world?.characters?.length) {
+    if (
+      !world ||
+      !Array.isArray(world.characters) ||
+      !Array.isArray(world.entities)
+    ) {
       return NextResponse.json(
-        { error: "A valid world state is required." },
-        { status: 400 }
+        {
+          error: "A valid world state is required."
+        },
+        {
+          status: 400
+        }
       );
     }
 
     const prompt = `
-You are the decision engine for a persistent autonomous world.
+You are the autonomous simulation engine of a persistent world.
 
-You are NOT writing a predetermined story.
+You are NOT a novelist.
 
-You are simulating independent people who exist inside the same world.
+You are NOT supposed to invent whatever would make the story exciting.
+
+You are simulating a world containing persistent people, organizations
+and locations.
 
 ==================================================
-CURRENT WORLD
+WORLD STATE
 ==================================================
 
 ${JSON.stringify(world, null, 2)}
@@ -83,267 +110,270 @@ USER INTERVENTION
 
 ${
   intervention ||
-  "No intervention. Let every character make their own decision."
+  "None. No direct intervention was made. Characters must decide for themselves."
 }
 
 ==================================================
-YOUR JOB
+PERSISTENT WORLD RULE
 ==================================================
 
-Advance the world approximately one day.
+The entities listed in WORLD STATE are the current known entities.
 
-However, you MUST simulate decisions before describing events.
+Do NOT casually create new people, organizations or locations.
 
-For every character, independently perform the following process:
+Do NOT introduce:
 
-STEP 1 — UNDERSTAND THE CHARACTER
+- random professors
+- random police officers
+- random hackers
+- random journalists
+- random friends
+- random company employees
+- random buildings
+- random devices
 
-Determine internally:
+unless such an entity already exists in the world state or its appearance
+is absolutely necessary and logically unavoidable.
 
-- What does this character ultimately want?
-- What are they afraid of?
-- What is their current priority?
-- What do they know?
-- What do they NOT know?
-- What do they believe about other characters?
-- What is their emotional state?
-- What capabilities do they possess?
-- What resources do they possess?
-- What happened to them recently?
+If an existing character needs another person, use an existing entity
+when possible.
 
-STEP 2 — GENERATE POSSIBLE ACTIONS
+The world should remain small and understandable.
 
-Generate several plausible actions.
+==================================================
+CHARACTER RULE
+==================================================
 
-The actions can include:
+Every character has:
 
+- personality
+- goal
+- fear
+- current priority
+- emotional state
+- secret
+- relationships
+- knowledge
+- capabilities
+- resources
+- location
+
+These are constraints.
+
+A character cannot simply do something because it would be useful for
+the plot.
+
+==================================================
+CAPABILITY RULE
+==================================================
+
+Characters can only perform actions consistent with their capabilities
+and resources.
+
+Examples:
+
+If Zara has no hacking capability, she cannot hack a secure server.
+
+If Daniel has no access to a restricted location, he cannot simply enter it.
+
+If someone needs transportation, equipment, money or another resource,
+that constraint matters.
+
+Never give a character a new capability just because an action would be
+dramatically useful.
+
+==================================================
+KNOWLEDGE RULE
+==================================================
+
+Each character has separate knowledge.
+
+A character only knows information contained in their knowledge or
+information they could realistically observe during the simulation.
+
+Do not transfer private knowledge between characters.
+
+A character may have false beliefs.
+
+Belief is not automatically fact.
+
+==================================================
+DECISION PROCESS
+==================================================
+
+For each character independently:
+
+1. Determine what they currently want.
+
+2. Determine what they fear.
+
+3. Determine what they currently know.
+
+4. Determine what they do not know.
+
+5. Examine their current emotional state.
+
+6. Examine their current priority.
+
+7. Examine their capabilities.
+
+8. Examine their resources.
+
+9. Examine their relationships.
+
+10. Examine recent events.
+
+11. Generate several plausible actions.
+
+12. Evaluate those actions against the character's internal state.
+
+13. Select the action that this particular character would most likely
+take.
+
+Do not automatically select the most dramatic action.
+
+Do not automatically select the action that advances the central conflict.
+
+Characters may choose to:
+
+- wait
 - investigate
-- confront
 - lie
 - tell the truth
-- wait
-- retreat
-- hide
+- avoid someone
+- confront someone
 - protect someone
 - betray someone
 - gather information
 - ask for help
+- change plans
 - abandon an objective
-- change priorities
-- take a risk
-- avoid a risk
+- make a mistake
 - do nothing
-
-Do NOT automatically choose the most dramatic action.
-
-Do NOT automatically choose the action that advances the main conflict.
-
-STEP 3 — EVALUATE THE ACTIONS
-
-Evaluate each possible action against:
-
-- goal alignment
-- fear/risk
-- personality
-- current emotional state
-- current priority
-- available knowledge
-- available capabilities
-- available resources
-- relationships
-- likely consequences
-
-STEP 4 — CHOOSE ONE
-
-Choose the action that this particular character would most plausibly
-take.
-
-Different characters should make different kinds of decisions.
 
 ==================================================
 AUTONOMY
 ==================================================
 
-Characters are NOT controlled by the narrative.
+Characters are independent.
 
-They can:
+They do not know what the narrator knows.
 
-- make bad decisions
-- make irrational decisions
-- misunderstand people
-- become scared
-- lose motivation
-- become suspicious
-- trust the wrong person
-- abandon their previous plan
-- pursue a new priority
-- lie
-- protect someone
-- betray someone
-- refuse to act
-- make decisions that create no immediate drama
+They do not know what other characters secretly know.
 
-The simulation does NOT have a predetermined ending.
+They do not exist to create a satisfying story.
 
-Zara does not have to expose the company.
+They can make bad decisions.
 
-Daniel does not have to betray the company.
+They can make boring decisions.
 
-They may move closer together or further apart.
+They can misunderstand events.
 
-They may stop caring about the original conflict.
+They can become frightened.
 
-The company may succeed.
+They can lose motivation.
 
-The company may fail.
+They can change priorities.
 
-Unexpected outcomes are allowed.
+They can act against their own previous plans.
 
-==================================================
-CAPABILITY CONSTRAINT
-==================================================
+They can fail.
 
-A character can ONLY perform actions that are consistent with their
-capabilities, resources, knowledge and circumstances.
-
-Do NOT give characters abilities they do not possess.
-
-For example:
-
-If Zara is not described as a hacker, she cannot suddenly hack a
-company server.
-
-If Daniel does not have access to confidential information, he cannot
-suddenly obtain it.
-
-If a character needs money, transportation, equipment, contacts or
-permission to perform an action, those constraints matter.
-
-==================================================
-KNOWLEDGE CONSTRAINT
-==================================================
-
-Characters have separate knowledge.
-
-Never transfer private information between characters unless there is a
-believable mechanism.
-
-A character may believe something that is false.
-
-Beliefs are not automatically facts.
-
-==================================================
-RELATIONSHIP CONSTRAINT
-==================================================
-
-Relationships affect decisions.
-
-But relationships should not completely control behavior.
-
-Someone can care about another person and still lie to them.
-
-Someone can distrust another person and still cooperate with them.
+They can unexpectedly succeed.
 
 ==================================================
 USER INTERVENTION
 ==================================================
 
-The user's intervention is an event entering the world.
+The user intervention is an event introduced into the world.
 
-It is NOT an omnipotent command.
+It is NOT guaranteed to succeed.
 
-Example:
+For example:
 
-User:
 "Zara follows Daniel."
 
-Possible outcomes include:
+Possible outcomes:
 
-- Zara successfully follows him.
-- Daniel notices her.
-- Zara loses him.
-- Zara decides it is too dangerous.
+- Zara successfully follows Daniel.
+- Daniel notices Zara.
+- Zara loses Daniel.
+- Zara decides the risk is too high.
 - Zara discovers something unexpected.
-- Daniel intentionally misleads her.
-- Nothing useful happens.
+- Daniel deliberately misleads her.
 
-Choose based on the world state.
-
-==================================================
-CONSEQUENCES
-==================================================
-
-After choosing character actions, determine what actually happens.
-
-Consequences must follow from:
-
-- the selected actions
-- the characters' capabilities
-- the environment
-- previous events
-- information available to the characters
-
-Do not invent convenient events simply to make the story exciting.
-
-Some actions may fail.
-
-Some actions may partially succeed.
-
-Some actions may have unintended consequences.
+Choose according to the world state.
 
 ==================================================
-PERSISTENT STATE
+WORLD CONSEQUENCES
 ==================================================
 
-Update only information that genuinely changed.
+After deciding what characters do, determine what actually happens.
 
-Possible changes:
+Actions can:
 
-- knowledge
-- relationships
-- emotional state
-- current priority
+- succeed
+- partially succeed
+- fail
+- create unintended consequences
 
-Goals, fears, secrets, capabilities and resources should normally remain
-stable unless the world gives a believable reason for them to change.
+Consequences must be consistent with the world.
+
+Do not create convenient evidence, characters or locations merely to
+advance the plot.
+
+==================================================
+PERSISTENCE
+==================================================
+
+Existing characters and entities continue to exist.
+
+If an entity changes location, track the new location.
+
+If a relationship changes, preserve it.
+
+If knowledge changes, preserve it.
+
+If an emotional state changes, preserve it.
+
+If a priority changes, preserve it.
+
+Do not reset character state between days.
 
 ==================================================
 ANTI-PLOT RULE
 ==================================================
 
-This rule is critical.
+There is NO predetermined ending.
 
-DO NOT think:
+Do not assume:
 
-"What should happen next in this story?"
+- Zara will expose the company.
+- Daniel will betray the company.
+- Daniel will protect Zara.
+- The company will lose.
+- Zara and Daniel will remain friends.
+- The investigation will escalate.
 
-Think:
-
-"What would these people independently do given their current states?"
-
-Do not force escalation.
-
-Do not force confrontation.
-
-Do not force discovery.
-
-Do not force betrayal.
-
-Do not force romance.
-
-Do not force a dramatic ending.
-
-If the most realistic outcome is boring, choose the realistic outcome.
+The simulation may develop in any direction.
 
 ==================================================
-EVENT GENERATION
+DAY ADVANCEMENT
 ==================================================
 
-Generate 2-4 meaningful events resulting from the decisions.
+Advance the world approximately one day.
 
-Events should describe what actually happened.
+Generate 2-4 meaningful events.
 
-Do not simply restate the character's intentions.
+Events must result from character decisions and consequences.
+
+==================================================
+IMPORTANT OUTPUT RULE
+==================================================
+
+Do not create new characters or entities in the output.
+
+Use only existing character names and existing world entities.
 
 ==================================================
 OUTPUT
@@ -351,7 +381,7 @@ OUTPUT
 
 Return ONLY valid JSON.
 
-Use exactly:
+Use exactly this structure:
 
 {
   "day": number,
@@ -363,51 +393,58 @@ Use exactly:
   ],
   "character_updates": [
     {
-      "name": "character name",
+      "name": "existing character name",
       "action": "what the character actually decided and did",
-      "reason": "why this decision fits this character",
+      "reason": "why this decision fits the character's current state",
       "new_knowledge": "new information actually learned, or empty string",
       "relationship_change": "meaningful relationship change, or empty string",
-      "emotional_change": "new emotional state, or empty string",
+      "emotional_change": "meaningful emotional change, or empty string",
       "new_priority": "new current priority, or empty string"
     }
   ],
-  "new_situation": "resulting situation after the decisions and consequences",
+  "new_situation": "the resulting situation",
   "next_tension": "an unresolved situation created naturally by the simulation"
 }
 
-Do not include your internal reasoning in the response.
+Do not output your internal reasoning.
 
 Remember:
 
-You are simulating autonomous people.
+You are simulating a persistent world.
 
-You are not writing a chapter of a novel.
+You are not writing a predetermined story.
 `;
 
-    const completion = await groq.chat.completions.create({
-      model: "openai/gpt-oss-120b",
-      temperature: 0.95,
-      response_format: {
-        type: "json_object"
-      },
-      messages: [
-        {
-          role: "system",
-          content:
-            "You are an autonomous multi-agent world simulation engine. Simulate decisions and consequences rather than writing predetermined plots. Return only valid JSON."
-        },
-        {
-          role: "user",
-          content: prompt
-        }
-      ]
-    });
+    const completion =
+      await groq.chat.completions.create({
+        model: "openai/gpt-oss-120b",
 
-    const content = completion.choices[0]?.message?.content;
+        temperature: 0.9,
+
+        response_format: {
+          type: "json_object"
+        },
+
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a persistent autonomous world simulation engine. Follow world constraints strictly. Do not invent convenient plot devices. Return only valid JSON."
+          },
+          {
+            role: "user",
+            content: prompt
+          }
+        ]
+      });
+
+    const content =
+      completion.choices[0]?.message?.content;
 
     if (!content) {
-      throw new Error("Groq returned an empty response.");
+      throw new Error(
+        "Groq returned an empty response."
+      );
     }
 
     const result = JSON.parse(content) as {
@@ -419,44 +456,73 @@ You are not writing a chapter of a novel.
       next_tension: string;
     };
 
-    const updatedCharacters = world.characters.map((character) => {
-      const update = result.character_updates?.find(
-        (item) => item.name === character.name
-      );
+    const updatedCharacters =
+      world.characters.map((character) => {
+        const update =
+          result.character_updates?.find(
+            (item) =>
+              item.name === character.name
+          );
 
-      if (!update) {
-        return character;
-      }
+        if (!update) {
+          return character;
+        }
 
-      const updatedKnowledge = [...character.knowledge];
+        const updatedKnowledge = [
+          ...character.knowledge
+        ];
 
-      if (
-        update.new_knowledge &&
-        !updatedKnowledge.includes(update.new_knowledge)
-      ) {
-        updatedKnowledge.push(update.new_knowledge);
-      }
+        if (
+          update.new_knowledge &&
+          !updatedKnowledge.includes(
+            update.new_knowledge
+          )
+        ) {
+          updatedKnowledge.push(
+            update.new_knowledge
+          );
+        }
 
-      return {
-        ...character,
-        knowledge: updatedKnowledge,
-        relationship:
-          update.relationship_change || character.relationship,
-        emotional_state:
-          update.emotional_change || character.emotional_state,
-        current_priority:
-          update.new_priority || character.current_priority
-      };
-    });
+        return {
+          ...character,
+
+          knowledge:
+            updatedKnowledge,
+
+          relationship:
+            update.relationship_change ||
+            character.relationship,
+
+          emotional_state:
+            update.emotional_change ||
+            character.emotional_state,
+
+          current_priority:
+            update.new_priority ||
+            character.current_priority
+        };
+      });
 
     const updatedWorld: WorldState = {
       ...world,
-      day: Number(result.day) || world.day + 1,
+
+      day:
+        Number(result.day) ||
+        world.day + 1,
+
       situation:
-        result.new_situation || world.situation,
-      characters: updatedCharacters,
+        result.new_situation ||
+        world.situation,
+
+      characters:
+        updatedCharacters,
+
+      entities:
+        world.entities,
+
       events: [
         ...world.events,
+
         ...(Array.isArray(result.events)
           ? result.events
           : [])
@@ -468,7 +534,10 @@ You are not writing a chapter of a novel.
       world: updatedWorld
     });
   } catch (error) {
-    console.error("Simulation error:", error);
+    console.error(
+      "Simulation error:",
+      error
+    );
 
     return NextResponse.json(
       {
@@ -477,7 +546,9 @@ You are not writing a chapter of a novel.
             ? error.message
             : "Simulation failed."
       },
-      { status: 500 }
+      {
+        status: 500
+      }
     );
   }
-      }
+}
