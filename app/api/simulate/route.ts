@@ -37,6 +37,33 @@ type WorldState = {
   events: string[];
 };
 
+type ProposedAction = {
+  actor: string;
+  action_type:
+    | "observe"
+    | "move"
+    | "talk"
+    | "investigate"
+    | "search"
+    | "protect"
+    | "lie"
+    | "follow"
+    | "wait"
+    | "contact"
+    | "destroy"
+    | "steal"
+    | "confront"
+    | "other";
+  target: string;
+  description: string;
+  reason: string;
+};
+
+type ValidatedAction = ProposedAction & {
+  result: "success" | "partial" | "failure";
+  consequence: string;
+};
+
 type CharacterUpdate = {
   name: string;
   action: string;
@@ -47,16 +74,302 @@ type CharacterUpdate = {
   new_priority: string;
 };
 
+type SimulationResult = {
+  day: number;
+  situation: string;
+  proposed_actions: ProposedAction[];
+  validated_actions: ValidatedAction[];
+  events: string[];
+  character_updates: CharacterUpdate[];
+  new_situation: string;
+  next_tension: string;
+};
+
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY
 });
 
-export async function POST(request: Request) {
+function findCharacter(
+  world: WorldState,
+  name: string
+) {
+  return world.characters.find(
+    (character) =>
+      character.name.toLowerCase() ===
+      name.toLowerCase()
+  );
+}
+
+function findEntity(
+  world: WorldState,
+  name: string
+) {
+  return world.entities.find(
+    (entity) =>
+      entity.name.toLowerCase() ===
+      name.toLowerCase() ||
+      entity.id.toLowerCase() ===
+      name.toLowerCase()
+  );
+}
+
+function validateAction(
+  world: WorldState,
+  action: ProposedAction
+): ValidatedAction {
+  const actor = findCharacter(
+    world,
+    action.actor
+  );
+
+  if (!actor) {
+    return {
+      ...action,
+      result: "failure",
+      consequence:
+        `Action failed because actor "${action.actor}" does not exist in the world.`
+    };
+  }
+
+  const targetCharacter = findCharacter(
+    world,
+    action.target
+  );
+
+  const targetEntity = findEntity(
+    world,
+    action.target
+  );
+
+  const targetExists =
+    Boolean(targetCharacter) ||
+    Boolean(targetEntity) ||
+    action.target === "" ||
+    action.target === "self";
+
+  if (!targetExists) {
+    return {
+      ...action,
+      result: "failure",
+      consequence:
+        `Action failed because target "${action.target}" does not exist in the current world.`
+    };
+  }
+
+  const capabilities = actor.capabilities
+    .join(" ")
+    .toLowerCase();
+
+  const resources = actor.resources
+    .join(" ")
+    .toLowerCase();
+
+  const knowledge = actor.knowledge
+    .join(" ")
+    .toLowerCase();
+
+  const description =
+    `${action.action_type} ${action.description}`.toLowerCase();
+
+  /*
+   * LOCATION VALIDATION
+   */
+
+  if (
+    action.action_type === "talk" ||
+    action.action_type === "confront"
+  ) {
+    if (
+      targetCharacter &&
+      targetCharacter.location !== actor.location
+    ) {
+      return {
+        ...action,
+        result: "failure",
+        consequence:
+          `${actor.name} cannot interact with ${targetCharacter.name} because they are not in the same location.`
+      };
+    }
+  }
+
+  /*
+   * CAPABILITY VALIDATION
+   */
+
+  if (
+    action.action_type === "investigate" &&
+    !(
+      capabilities.includes("investigat") ||
+      capabilities.includes("observ") ||
+      capabilities.includes("research")
+    )
+  ) {
+    return {
+      ...action,
+      result: "failure",
+      consequence:
+        `${actor.name} lacks a capability that supports this investigation.`
+    };
+  }
+
+  /*
+   * SEARCH VALIDATION
+   */
+
+  if (
+    action.action_type === "search"
+  ) {
+    const canSearch =
+      capabilities.includes("investigat") ||
+      capabilities.includes("observ") ||
+      capabilities.includes("search");
+
+    if (!canSearch) {
+      return {
+        ...action,
+        result: "failure",
+        consequence:
+          `${actor.name} does not have the capability required to conduct this search.`
+      };
+    }
+
+    if (
+      !description.includes("locker") &&
+      !description.includes("room") &&
+      !description.includes("bag") &&
+      !description.includes("phone") &&
+      !description.includes("device") &&
+      !description.includes("location")
+    ) {
+      return {
+        ...action,
+        result: "partial",
+        consequence:
+          `${actor.name} searches the available area but finds nothing conclusive.`
+      };
+    }
+  }
+
+  /*
+   * FOLLOW VALIDATION
+   */
+
+  if (
+    action.action_type === "follow"
+  ) {
+    if (!targetCharacter) {
+      return {
+        ...action,
+        result: "failure",
+        consequence:
+          `${actor.name} cannot follow the specified target because the target is not an existing character.`
+      };
+    }
+
+    if (
+      !capabilities.includes("observ") &&
+      !capabilities.includes("investigat")
+    ) {
+      return {
+        ...action,
+        result: "partial",
+        consequence:
+          `${actor.name} attempts to follow ${targetCharacter.name}, but lacks strong surveillance or investigation skills.`
+      };
+    }
+  }
+
+  /*
+   * DESTROY VALIDATION
+   */
+
+  if (
+    action.action_type === "destroy"
+  ) {
+    const hasRelevantResource =
+      resources.includes("phone") ||
+      resources.includes("laptop") ||
+      resources.includes("device") ||
+      resources.includes("paper") ||
+      resources.includes("envelope") ||
+      knowledge.includes("envelope");
+
+    if (!hasRelevantResource) {
+      return {
+        ...action,
+        result: "failure",
+        consequence:
+          `${actor.name} cannot destroy the target because no relevant resource or object is currently known to be available.`
+      };
+    }
+  }
+
+  /*
+   * CONTACT VALIDATION
+   */
+
+  if (
+    action.action_type === "contact"
+  ) {
+    if (
+      !(
+        resources.includes("smartphone") ||
+        resources.includes("phone") ||
+        resources.includes("laptop")
+      )
+    ) {
+      return {
+        ...action,
+        result: "failure",
+        consequence:
+          `${actor.name} has no known communication resource available.`
+      };
+    }
+  }
+
+  /*
+   * MOVE VALIDATION
+   */
+
+  if (
+    action.action_type === "move"
+  ) {
+    const location =
+      targetEntity?.type === "location"
+        ? targetEntity
+        : undefined;
+
+    if (!location) {
+      return {
+        ...action,
+        result: "failure",
+        consequence:
+          `Movement failed because "${action.target}" is not an existing location.`
+      };
+    }
+  }
+
+  /*
+   * OTHERWISE THE ACTION IS PLAUSIBLE
+   */
+
+  return {
+    ...action,
+    result: "success",
+    consequence:
+      `${actor.name} successfully carried out the action.`
+  };
+}
+
+export async function POST(
+  request: Request
+) {
   try {
     if (!process.env.GROQ_API_KEY) {
       return NextResponse.json(
         {
-          error: "GROQ_API_KEY is not configured."
+          error:
+            "GROQ_API_KEY is not configured."
         },
         {
           status: 500
@@ -76,11 +389,13 @@ export async function POST(request: Request) {
     if (
       !world ||
       !Array.isArray(world.characters) ||
-      !Array.isArray(world.entities)
+      !Array.isArray(world.entities) ||
+      !Array.isArray(world.events)
     ) {
       return NextResponse.json(
         {
-          error: "A valid world state is required."
+          error:
+            "A valid world state is required."
         },
         {
           status: 400
@@ -88,18 +403,27 @@ export async function POST(request: Request) {
       );
     }
 
-    const prompt = `
-You are the autonomous simulation engine of a persistent world.
+    /*
+     * STEP 1
+     *
+     * Ask the model to propose actions.
+     *
+     * It is NOT allowed to directly modify the world.
+     */
 
-You are NOT a novelist.
+    const decisionPrompt = `
+You are the decision layer of an autonomous world simulator.
 
-You are NOT supposed to invent whatever would make the story exciting.
+You are NOT the narrator.
 
-You are simulating a world containing persistent people, organizations
-and locations.
+You are NOT allowed to directly create events.
+
+You are NOT allowed to modify the world.
+
+Your only job is to propose plausible actions for existing characters.
 
 ==================================================
-WORLD STATE
+CURRENT WORLD
 ==================================================
 
 ${JSON.stringify(world, null, 2)}
@@ -110,270 +434,100 @@ USER INTERVENTION
 
 ${
   intervention ||
-  "None. No direct intervention was made. Characters must decide for themselves."
+  "None. Characters must make their own decisions."
 }
 
 ==================================================
-PERSISTENT WORLD RULE
+STRICT RULES
 ==================================================
 
-The entities listed in WORLD STATE are the current known entities.
+Only use characters that already exist.
 
-Do NOT casually create new people, organizations or locations.
+Only use entities that already exist.
 
-Do NOT introduce:
+Do NOT create:
 
-- random professors
-- random police officers
-- random hackers
-- random journalists
-- random friends
-- random company employees
-- random buildings
-- random devices
+- new people
+- new organizations
+- new locations
+- journalists
+- police officers
+- professors
+- students
+- hackers
+- security guards
+- devices
+- evidence
+- buildings
 
-unless such an entity already exists in the world state or its appearance
-is absolutely necessary and logically unavoidable.
+unless they already exist in the world state.
 
-If an existing character needs another person, use an existing entity
-when possible.
+Each character has separate:
 
-The world should remain small and understandable.
-
-==================================================
-CHARACTER RULE
-==================================================
-
-Every character has:
-
-- personality
-- goal
-- fear
-- current priority
-- emotional state
-- secret
-- relationships
 - knowledge
 - capabilities
 - resources
-- location
+- emotions
+- goals
+- fears
+- relationships
+- priorities
 
-These are constraints.
+Respect these constraints.
 
-A character cannot simply do something because it would be useful for
-the plot.
+A character cannot know another character's secret unless there is a plausible way they learned it.
 
-==================================================
-CAPABILITY RULE
-==================================================
+A character cannot perform an action simply because it would make the story more interesting.
 
-Characters can only perform actions consistent with their capabilities
-and resources.
+The user intervention is only a proposed event.
 
-Examples:
-
-If Zara has no hacking capability, she cannot hack a secure server.
-
-If Daniel has no access to a restricted location, he cannot simply enter it.
-
-If someone needs transportation, equipment, money or another resource,
-that constraint matters.
-
-Never give a character a new capability just because an action would be
-dramatically useful.
-
-==================================================
-KNOWLEDGE RULE
-==================================================
-
-Each character has separate knowledge.
-
-A character only knows information contained in their knowledge or
-information they could realistically observe during the simulation.
-
-Do not transfer private knowledge between characters.
-
-A character may have false beliefs.
-
-Belief is not automatically fact.
+It can fail.
 
 ==================================================
 DECISION PROCESS
 ==================================================
 
-For each character independently:
+For every character:
 
-1. Determine what they currently want.
+1. Examine their goals.
+2. Examine their fears.
+3. Examine their current priority.
+4. Examine their knowledge.
+5. Examine their emotional state.
+6. Examine their capabilities.
+7. Examine their resources.
+8. Examine their relationships.
+9. Examine recent events.
+10. Decide what they would realistically attempt next.
 
-2. Determine what they fear.
-
-3. Determine what they currently know.
-
-4. Determine what they do not know.
-
-5. Examine their current emotional state.
-
-6. Examine their current priority.
-
-7. Examine their capabilities.
-
-8. Examine their resources.
-
-9. Examine their relationships.
-
-10. Examine recent events.
-
-11. Generate several plausible actions.
-
-12. Evaluate those actions against the character's internal state.
-
-13. Select the action that this particular character would most likely
-take.
-
-Do not automatically select the most dramatic action.
-
-Do not automatically select the action that advances the central conflict.
-
-Characters may choose to:
+Characters can:
 
 - wait
 - investigate
+- observe
+- talk
 - lie
-- tell the truth
-- avoid someone
-- confront someone
-- protect someone
-- betray someone
-- gather information
-- ask for help
-- change plans
-- abandon an objective
-- make a mistake
+- follow
+- confront
+- protect
+- contact someone
+- move
+- search
+- abandon a plan
+- make mistakes
 - do nothing
 
-==================================================
-AUTONOMY
-==================================================
-
-Characters are independent.
-
-They do not know what the narrator knows.
-
-They do not know what other characters secretly know.
-
-They do not exist to create a satisfying story.
-
-They can make bad decisions.
-
-They can make boring decisions.
-
-They can misunderstand events.
-
-They can become frightened.
-
-They can lose motivation.
-
-They can change priorities.
-
-They can act against their own previous plans.
-
-They can fail.
-
-They can unexpectedly succeed.
+Do NOT make every character take dramatic action.
 
 ==================================================
-USER INTERVENTION
+IMPORTANT
 ==================================================
 
-The user intervention is an event introduced into the world.
+You are proposing actions.
 
-It is NOT guaranteed to succeed.
+The server will decide whether those actions are actually possible.
 
-For example:
-
-"Zara follows Daniel."
-
-Possible outcomes:
-
-- Zara successfully follows Daniel.
-- Daniel notices Zara.
-- Zara loses Daniel.
-- Zara decides the risk is too high.
-- Zara discovers something unexpected.
-- Daniel deliberately misleads her.
-
-Choose according to the world state.
-
-==================================================
-WORLD CONSEQUENCES
-==================================================
-
-After deciding what characters do, determine what actually happens.
-
-Actions can:
-
-- succeed
-- partially succeed
-- fail
-- create unintended consequences
-
-Consequences must be consistent with the world.
-
-Do not create convenient evidence, characters or locations merely to
-advance the plot.
-
-==================================================
-PERSISTENCE
-==================================================
-
-Existing characters and entities continue to exist.
-
-If an entity changes location, track the new location.
-
-If a relationship changes, preserve it.
-
-If knowledge changes, preserve it.
-
-If an emotional state changes, preserve it.
-
-If a priority changes, preserve it.
-
-Do not reset character state between days.
-
-==================================================
-ANTI-PLOT RULE
-==================================================
-
-There is NO predetermined ending.
-
-Do not assume:
-
-- Zara will expose the company.
-- Daniel will betray the company.
-- Daniel will protect Zara.
-- The company will lose.
-- Zara and Daniel will remain friends.
-- The investigation will escalate.
-
-The simulation may develop in any direction.
-
-==================================================
-DAY ADVANCEMENT
-==================================================
-
-Advance the world approximately one day.
-
-Generate 2-4 meaningful events.
-
-Events must result from character decisions and consequences.
-
-==================================================
-IMPORTANT OUTPUT RULE
-==================================================
-
-Do not create new characters or entities in the output.
-
-Use only existing character names and existing world entities.
+Do not assume an action succeeds.
 
 ==================================================
 OUTPUT
@@ -381,152 +535,377 @@ OUTPUT
 
 Return ONLY valid JSON.
 
-Use exactly this structure:
+Use exactly:
 
 {
-  "day": number,
-  "situation": "short description of the resulting world situation",
-  "events": [
-    "event 1",
-    "event 2",
-    "event 3"
-  ],
-  "character_updates": [
+  "proposed_actions": [
     {
-      "name": "existing character name",
-      "action": "what the character actually decided and did",
-      "reason": "why this decision fits the character's current state",
-      "new_knowledge": "new information actually learned, or empty string",
-      "relationship_change": "meaningful relationship change, or empty string",
-      "emotional_change": "meaningful emotional change, or empty string",
-      "new_priority": "new current priority, or empty string"
+      "actor": "existing character name",
+      "action_type": "observe | move | talk | investigate | search | protect | lie | follow | wait | contact | destroy | steal | confront | other",
+      "target": "existing character/entity name, or empty string",
+      "description": "specific action the character proposes",
+      "reason": "why the character would attempt it"
     }
-  ],
-  "new_situation": "the resulting situation",
-  "next_tension": "an unresolved situation created naturally by the simulation"
+  ]
 }
 
-Do not output your internal reasoning.
+Generate at most one primary action per character.
 
-Remember:
-
-You are simulating a persistent world.
-
-You are not writing a predetermined story.
+Do not create anything that does not already exist.
 `;
 
-    const completion =
+    const decisionCompletion =
       await groq.chat.completions.create({
         model: "openai/gpt-oss-120b",
-
-        temperature: 0.9,
-
+        temperature: 0.7,
         response_format: {
           type: "json_object"
         },
-
         messages: [
           {
             role: "system",
             content:
-              "You are a persistent autonomous world simulation engine. Follow world constraints strictly. Do not invent convenient plot devices. Return only valid JSON."
+              "You are an autonomous decision engine. Propose constrained actions only. Never invent entities."
           },
           {
             role: "user",
-            content: prompt
+            content: decisionPrompt
           }
         ]
       });
 
-    const content =
-      completion.choices[0]?.message?.content;
+    const decisionContent =
+      decisionCompletion.choices[0]?.message
+        ?.content;
 
-    if (!content) {
+    if (!decisionContent) {
       throw new Error(
-        "Groq returned an empty response."
+        "Decision engine returned an empty response."
       );
     }
 
-    const result = JSON.parse(content) as {
-      day: number;
-      situation: string;
-      events: string[];
-      character_updates: CharacterUpdate[];
-      new_situation: string;
-      next_tension: string;
+    const decisionData = JSON.parse(
+      decisionContent
+    ) as {
+      proposed_actions?: ProposedAction[];
     };
 
-    const updatedCharacters =
-      world.characters.map((character) => {
-        const update =
-          result.character_updates?.find(
-            (item) =>
-              item.name === character.name
-          );
+    const proposedActions =
+      Array.isArray(
+        decisionData.proposed_actions
+      )
+        ? decisionData.proposed_actions
+        : [];
 
-        if (!update) {
-          return character;
-        }
+    /*
+     * STEP 2
+     *
+     * Validate every proposed action using code.
+     */
 
-        const updatedKnowledge = [
-          ...character.knowledge
-        ];
-
-        if (
-          update.new_knowledge &&
-          !updatedKnowledge.includes(
-            update.new_knowledge
+    const validatedActions =
+      proposedActions.map(
+        (action) =>
+          validateAction(
+            world,
+            action
           )
-        ) {
-          updatedKnowledge.push(
-            update.new_knowledge
-          );
-        }
+      );
 
-        return {
-          ...character,
+    /*
+     * STEP 3
+     *
+     * Give the validated actions back to the model.
+     *
+     * The model can now describe consequences,
+     * but only from actions that the engine accepted.
+     */
 
-          knowledge:
-            updatedKnowledge,
+    const consequencePrompt = `
+You are the consequence layer of a persistent world simulator.
 
-          relationship:
-            update.relationship_change ||
-            character.relationship,
+You have been given:
 
-          emotional_state:
-            update.emotional_change ||
-            character.emotional_state,
+1. The existing world.
+2. Character actions proposed by the decision engine.
+3. Server validation results.
 
-          current_priority:
-            update.new_priority ||
-            character.current_priority
-        };
+You must now determine what happens.
+
+==================================================
+WORLD
+==================================================
+
+${JSON.stringify(world, null, 2)}
+
+==================================================
+VALIDATED ACTIONS
+==================================================
+
+${JSON.stringify(
+  validatedActions,
+  null,
+  2
+)}
+
+==================================================
+RULES
+==================================================
+
+The validated action results are authoritative.
+
+If an action is:
+
+SUCCESS:
+The character actually performed it.
+
+PARTIAL:
+The character attempted it but only part of the intended outcome happened.
+
+FAILURE:
+The action did not happen.
+
+Do NOT turn a failed action into a success.
+
+Do NOT introduce new characters.
+
+Do NOT introduce new organizations.
+
+Do NOT introduce new locations.
+
+Do NOT invent evidence.
+
+Do NOT invent resources.
+
+Do NOT invent capabilities.
+
+Do NOT invent secret information.
+
+Do NOT give characters knowledge they could not have obtained.
+
+Only describe consequences that logically follow from the validated actions and existing world.
+
+The world should evolve gradually.
+
+Not every day needs a major revelation.
+
+==================================================
+USER INTERVENTION
+==================================================
+
+If an intervention exists in the world context, treat it as another proposed action.
+
+It may succeed, partially succeed or fail.
+
+==================================================
+OUTPUT
+==================================================
+
+Return ONLY valid JSON.
+
+Use:
+
+{
+  "situation": "short description of the resulting situation",
+  "events": [
+    "2-4 concrete events that actually happened"
+  ],
+  "character_updates": [
+    {
+      "name": "existing character",
+      "action": "what they actually did",
+      "reason": "why they did it",
+      "new_knowledge": "information they actually learned, or empty string",
+      "relationship_change": "meaningful change, or empty string",
+      "emotional_change": "meaningful change, or empty string",
+      "new_priority": "new priority, or empty string"
+    }
+  ],
+  "new_situation": "resulting world situation",
+  "next_tension": "unresolved tension that naturally follows"
+}
+
+Do not output internal reasoning.
+`;
+
+    const consequenceCompletion =
+      await groq.chat.completions.create({
+        model: "openai/gpt-oss-120b",
+        temperature: 0.75,
+        response_format: {
+          type: "json_object"
+        },
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are a constrained consequence engine. Validated actions are authoritative. Never invent entities."
+          },
+          {
+            role: "user",
+            content:
+              consequencePrompt
+          }
+        ]
       });
+
+    const consequenceContent =
+      consequenceCompletion.choices[0]?.message
+        ?.content;
+
+    if (!consequenceContent) {
+      throw new Error(
+        "Consequence engine returned an empty response."
+      );
+    }
+
+    const consequenceData =
+      JSON.parse(
+        consequenceContent
+      ) as {
+        situation: string;
+        events: string[];
+        character_updates: CharacterUpdate[];
+        new_situation: string;
+        next_tension: string;
+      };
+
+    /*
+     * STEP 4
+     *
+     * Apply only validated consequences to the world.
+     */
+
+    const updatedCharacters =
+      world.characters.map(
+        (character) => {
+          const update =
+            consequenceData.character_updates?.find(
+              (item) =>
+                item.name ===
+                character.name
+            );
+
+          if (!update) {
+            return character;
+          }
+
+          const updatedKnowledge = [
+            ...character.knowledge
+          ];
+
+          if (
+            update.new_knowledge &&
+            !updatedKnowledge.includes(
+              update.new_knowledge
+            )
+          ) {
+            updatedKnowledge.push(
+              update.new_knowledge
+            );
+          }
+
+          return {
+            ...character,
+            knowledge:
+              updatedKnowledge,
+            relationship:
+              update.relationship_change ||
+              character.relationship,
+            emotional_state:
+              update.emotional_change ||
+              character.emotional_state,
+            current_priority:
+              update.new_priority ||
+              character.current_priority
+          };
+        }
+      );
+
+    /*
+     * Update locations only when a validated
+     * movement action succeeded.
+     */
+
+    for (const action of validatedActions) {
+      if (
+        action.result !== "success" ||
+        action.action_type !== "move"
+      ) {
+        continue;
+      }
+
+      const actor =
+        updatedCharacters.find(
+          (character) =>
+            character.name ===
+            action.actor
+        );
+
+      const destination =
+        findEntity(
+          world,
+          action.target
+        );
+
+      if (
+        actor &&
+        destination &&
+        destination.type ===
+          "location"
+      ) {
+        actor.location =
+          destination.name;
+      }
+    }
+
+    const events = Array.isArray(
+      consequenceData.events
+    )
+      ? consequenceData.events.filter(
+          (event) =>
+            typeof event ===
+              "string" &&
+            event.trim().length > 0
+        )
+      : [];
 
     const updatedWorld: WorldState = {
       ...world,
-
-      day:
-        Number(result.day) ||
-        world.day + 1,
-
+      day: world.day + 1,
       situation:
-        result.new_situation ||
+        consequenceData.new_situation ||
+        consequenceData.situation ||
         world.situation,
-
       characters:
         updatedCharacters,
-
       entities:
         world.entities,
-
       events: [
         ...world.events,
-
-        ...(Array.isArray(result.events)
-          ? result.events
-          : [])
+        ...events
       ]
+    };
+
+    const result: SimulationResult = {
+      day: updatedWorld.day,
+      situation:
+        consequenceData.situation ||
+        updatedWorld.situation,
+      proposed_actions:
+        proposedActions,
+      validated_actions:
+        validatedActions,
+      events,
+      character_updates:
+        consequenceData.character_updates ||
+        [],
+      new_situation:
+        consequenceData.new_situation ||
+        updatedWorld.situation,
+      next_tension:
+        consequenceData.next_tension ||
+        ""
     };
 
     return NextResponse.json({
