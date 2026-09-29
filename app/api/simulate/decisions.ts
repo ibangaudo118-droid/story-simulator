@@ -9,11 +9,18 @@ import {
   buildMindState,
 } from "./mind";
 
-type Decision = {
+export type Decision = {
   action: ActionType;
   reason: string;
   score: number;
 };
+
+function clamp(value: number) {
+  return Math.max(
+    0,
+    Math.min(100, value)
+  );
+}
 
 function hasCapability(
   character: Character,
@@ -38,13 +45,6 @@ function recentlyDid(
   );
 }
 
-function sameLocation(
-  first: Character,
-  second: Character
-) {
-  return first.location === second.location;
-}
-
 function getRelationship(
   character: Character,
   targetId: string
@@ -52,6 +52,40 @@ function getRelationship(
   return character.relationships.find(
     (relationship) =>
       relationship.targetId === targetId
+  );
+}
+
+function getCharacter(
+  world: WorldState,
+  id: string
+) {
+  return world.characters.find(
+    (character) =>
+      character.id === id
+  );
+}
+
+function sameLocation(
+  first: Character,
+  second: Character
+) {
+  return (
+    first.location ===
+    second.location
+  );
+}
+
+function getNearbyCharacter(
+  world: WorldState,
+  character: Character
+) {
+  return world.characters.find(
+    (other) =>
+      other.id !== character.id &&
+      sameLocation(
+        character,
+        other
+      )
   );
 }
 
@@ -83,19 +117,16 @@ function getLegalActions(
   }
 
   if (
-    location?.connectedTo?.length
+    location?.connectedTo &&
+    location.connectedTo.length > 0
   ) {
     actions.push("MOVE");
   }
 
   const nearbyCharacter =
-    world.characters.find(
-      (other) =>
-        other.id !== character.id &&
-        sameLocation(
-          character,
-          other
-        )
+    getNearbyCharacter(
+      world,
+      character
     );
 
   if (nearbyCharacter) {
@@ -108,6 +139,25 @@ function getLegalActions(
   return actions;
 }
 
+function getMotiveStrength(
+  mind: MindState,
+  type: string
+) {
+  return mind.motives
+    .filter(
+      (motive) =>
+        motive.type === type
+    )
+    .reduce(
+      (total, motive) =>
+        Math.max(
+          total,
+          motive.strength
+        ),
+      0
+    );
+}
+
 function scoreAction(
   world: WorldState,
   character: Character,
@@ -116,158 +166,264 @@ function scoreAction(
 ): Decision {
   let score = 0;
 
-  let reason =
-    "The action is currently possible.";
+  let reasons: string[] = [];
+
+  const nearbyCharacter =
+    getNearbyCharacter(
+      world,
+      character
+    );
 
   const zara =
-    world.characters.find(
-      (item) => item.id === "zara"
+    getCharacter(
+      world,
+      "zara"
     );
 
   const daniel =
-    world.characters.find(
-      (item) => item.id === "daniel"
+    getCharacter(
+      world,
+      "daniel"
     );
 
-  const relationship =
-    character.id === "zara" && daniel
-      ? getRelationship(
-          character,
-          "daniel"
-        )
-      : character.id === "daniel" &&
-        zara
-      ? getRelationship(
-          character,
-          "zara"
-        )
-      : undefined;
-
   /*
-   * OBSERVE
-   *
-   * Safe and useful, but rarely advances
-   * the main goal dramatically.
+   * BASE BEHAVIOUR
    */
+
+  if (action === "WAIT") {
+    score += 10;
+
+    reasons.push(
+      "Waiting avoids unnecessary risk."
+    );
+  }
+
   if (action === "OBSERVE") {
     score += 25;
 
-    reason =
-      "Observing provides information without creating much risk.";
+    reasons.push(
+      "Observing can reveal information without creating much risk."
+    );
   }
 
   /*
-   * WAIT
-   *
-   * Characters may wait when acting is risky.
+   * INVESTIGATION
    */
-  if (action === "WAIT") {
-    score += 15;
 
-    reason =
-      "Waiting allows the character to avoid unnecessary risk.";
-  }
-
-  /*
-   * INVESTIGATE
-   */
   if (action === "INVESTIGATE") {
+    if (
+      hasCapability(
+        character,
+        "investigation"
+      )
+    ) {
+      score += 55;
+
+      reasons.push(
+        "Investigation directly supports the character's ability to understand the situation."
+      );
+    }
+
+    const goalStrength =
+      getMotiveStrength(
+        mind,
+        "GOAL"
+      );
+
+    const curiosityStrength =
+      getMotiveStrength(
+        mind,
+        "CURIOSITY"
+      );
+
+    score +=
+      goalStrength * 0.45;
+
+    score +=
+      curiosityStrength * 0.25;
+
+    if (
+      world.evidence.length === 0
+    ) {
+      score += 20;
+
+      reasons.push(
+        "There is still no concrete evidence."
+      );
+    } else {
+      score += 10;
+
+      reasons.push(
+        "Existing evidence gives the investigation something to build on."
+      );
+    }
+
     if (
       character.id === "zara"
     ) {
-      score += 75;
+      score += 20;
 
-      if (world.evidence.length === 0) {
-        score += 25;
-
-        reason =
-          "Zara needs concrete evidence to understand what the company is doing.";
-      } else {
-        score += 10;
-
-        reason =
-          "Zara wants to connect the evidence she already has.";
-      }
-
-      if (
-        mind.motives.some(
-          (motive) =>
-            motive.type ===
-              "CURIOSITY" &&
-            motive.strength >= 60
-        )
-      ) {
-        score += 15;
-      }
+      reasons.push(
+        "Zara's main objective is to uncover what the company is doing."
+      );
     }
   }
 
   /*
    * SEARCH
    */
+
   if (action === "SEARCH") {
+    if (
+      hasCapability(
+        character,
+        "investigation"
+      )
+    ) {
+      score += 45;
+    }
+
+    const goalStrength =
+      getMotiveStrength(
+        mind,
+        "GOAL"
+      );
+
+    score +=
+      goalStrength * 0.3;
+
+    if (
+      world.evidence.length === 0
+    ) {
+      score += 20;
+
+      reasons.push(
+        "Searching could produce the first useful clue."
+      );
+    } else {
+      score += 15;
+
+      reasons.push(
+        "Searching could connect existing evidence to something new."
+      );
+    }
+
     if (
       character.id === "zara"
     ) {
-      score += 65;
+      score += 15;
 
-      reason =
-        "Searching may reveal information that supports the investigation.";
-
-      if (
-        world.evidence.length > 0
-      ) {
-        score += 15;
-      }
+      reasons.push(
+        "Zara is actively looking for evidence."
+      );
     }
   }
 
   /*
    * TALK
    */
+
   if (action === "TALK") {
-    score += 35;
+    score += 30;
 
-    if (
-      character.id === "zara" &&
-      relationship
-    ) {
-      score +=
-        relationship.suspicion * 0.5;
+    if (!nearbyCharacter) {
+      score = -Infinity;
+
+      reasons.push(
+        "There is nobody nearby to talk to."
+      );
+    } else {
+      const relationship =
+        getRelationship(
+          character,
+          nearbyCharacter.id
+        );
+
+      const suspicion =
+        relationship?.suspicion ?? 0;
+
+      const trust =
+        relationship?.trust ?? 0;
+
+      /*
+       * Zara becomes more interested
+       * in talking when suspicion rises.
+       */
 
       if (
-        relationship.suspicion >=
-        60
+        character.id === "zara"
       ) {
-        score += 20;
+        score +=
+          suspicion * 0.65;
 
-        reason =
-          "Zara wants to question Daniel because she suspects he is hiding something.";
-      } else {
-        score += 10;
+        score +=
+          trust * 0.15;
 
-        reason =
-          "Zara wants to understand Daniel's involvement.";
+        if (
+          suspicion >= 70
+        ) {
+          score += 20;
+
+          reasons.push(
+            `${nearbyCharacter.name}'s behaviour has become suspicious enough to justify questioning them.`
+          );
+        } else if (
+          suspicion >= 50
+        ) {
+          score += 10;
+
+          reasons.push(
+            `${nearbyCharacter.name} may know something useful.`
+          );
+        } else {
+          score += 5;
+
+          reasons.push(
+            "Maintaining the relationship may reveal information later."
+          );
+        }
       }
-    }
 
-    if (
-      character.id === "daniel" &&
-      relationship
-    ) {
+      /*
+       * Daniel's willingness to talk
+       * decreases as exposure risk rises.
+       */
+
       if (
-        relationship.suspicion >=
-        55
+        character.id === "daniel"
       ) {
-        score -= 30;
+        score +=
+          trust * 0.25;
 
-        reason =
-          "Daniel is becoming afraid that talking to Zara could expose him.";
-      } else {
-        score += 25;
+        score -=
+          suspicion * 0.55;
 
-        reason =
-          "Daniel wants to maintain Zara's trust.";
+        const selfPreservation =
+          getMotiveStrength(
+            mind,
+            "SELF_PRESERVATION"
+          );
+
+        score -=
+          selfPreservation * 0.2;
+
+        if (
+          suspicion >= 70
+        ) {
+          score -= 25;
+
+          reasons.push(
+            "Daniel fears that talking could expose what he knows."
+          );
+        } else if (
+          trust >= 60
+        ) {
+          score += 15;
+
+          reasons.push(
+            "Daniel still has enough trust to maintain the relationship."
+          );
+        }
       }
     }
   }
@@ -275,119 +431,345 @@ function scoreAction(
   /*
    * FOLLOW
    */
-  if (action === "FOLLOW") {
-    if (
-      character.id === "zara" &&
-      relationship
-    ) {
-      score +=
-        relationship.suspicion * 0.8;
 
-      reason =
-        "Zara's suspicion makes following Daniel increasingly attractive.";
+  if (action === "FOLLOW") {
+    if (!nearbyCharacter) {
+      score = -Infinity;
+
+      reasons.push(
+        "There is nobody nearby to follow."
+      );
+    } else {
+      const relationship =
+        getRelationship(
+          character,
+          nearbyCharacter.id
+        );
+
+      const suspicion =
+        relationship?.suspicion ?? 0;
 
       if (
-        relationship.suspicion >=
-        70
+        character.id === "zara"
       ) {
-        score += 25;
+        score += 20;
+
+        score +=
+          suspicion * 0.85;
+
+        if (
+          suspicion >= 70
+        ) {
+          score += 30;
+
+          reasons.push(
+            "Zara's high suspicion makes following increasingly attractive."
+          );
+        } else if (
+          suspicion >= 50
+        ) {
+          score += 15;
+
+          reasons.push(
+            "Zara has enough suspicion to consider following."
+          );
+        } else {
+          score -= 15;
+
+          reasons.push(
+            "Zara has little reason to follow without stronger suspicion."
+          );
+        }
       }
-    }
 
-    if (
-      character.id === "daniel"
-    ) {
-      score -= 20;
+      if (
+        character.id === "daniel"
+      ) {
+        score -= 25;
 
-      reason =
-        "Daniel has little reason to follow Zara right now.";
+        reasons.push(
+          "Daniel has little reason to follow Zara right now."
+        );
+      }
     }
   }
 
   /*
    * MOVE
    */
+
   if (action === "MOVE") {
-    score += 30;
+    score += 25;
 
-    if (
-      character.id === "daniel"
-    ) {
-      if (
-        relationship &&
-        relationship.suspicion >=
-          55
-      ) {
-        score += 35;
-
-        reason =
-          "Daniel wants distance from Zara because he fears exposure.";
-      }
-    }
+    reasons.push(
+      "Moving creates access to different people and information."
+    );
 
     if (
       character.id === "zara"
     ) {
+      const goalStrength =
+        getMotiveStrength(
+          mind,
+          "GOAL"
+        );
+
+      score +=
+        goalStrength * 0.15;
+
       if (
         world.evidence.length > 0
       ) {
         score += 15;
 
-        reason =
-          "Zara may need to move to another location to continue investigating.";
+        reasons.push(
+          "New evidence may require Zara to investigate another location."
+        );
       }
+    }
+
+    if (
+      character.id === "daniel"
+    ) {
+      const relationship =
+        zara
+          ? getRelationship(
+              character,
+              zara.id
+            )
+          : undefined;
+
+      const suspicion =
+        relationship?.suspicion ?? 0;
+
+      if (
+        suspicion >= 55
+      ) {
+        score +=
+          suspicion * 0.45;
+
+        reasons.push(
+          "Daniel wants distance when he feels Zara is becoming suspicious."
+        );
+      }
+
+      const selfPreservation =
+        getMotiveStrength(
+          mind,
+          "SELF_PRESERVATION"
+        );
+
+      score +=
+        selfPreservation * 0.15;
     }
   }
 
   /*
-   * Repeating the same action becomes
-   * progressively less attractive.
+   * RECENT REPETITION
    */
+
   if (
     recentlyDid(
       character,
       action
     )
   ) {
-    score -= 25;
+    score -= 30;
 
-    reason +=
-      " The character has just done this, making repetition less attractive.";
+    reasons.push(
+      "The character recently performed this action, making repetition less attractive."
+    );
   }
 
   /*
-   * Strong fear can override risky actions.
+   * REPEATED ACTION PATTERNS
    */
+
+  const recentCount =
+    character.recentActions.filter(
+      (recentAction) =>
+        recentAction === action
+    ).length;
+
+  if (
+    recentCount >= 2
+  ) {
+    score -=
+      recentCount * 10;
+
+    reasons.push(
+      "Repeated behaviour is becoming less attractive."
+    );
+  }
+
+  /*
+   * SELF-PRESERVATION
+   */
+
   const selfPreservation =
-    mind.motives.find(
-      (motive) =>
-        motive.type ===
-        "SELF_PRESERVATION"
+    getMotiveStrength(
+      mind,
+      "SELF_PRESERVATION"
     );
 
   if (
-    selfPreservation &&
-    selfPreservation.strength >=
-      85
+    selfPreservation >= 80
   ) {
     if (
       action === "FOLLOW" ||
       action === "INVESTIGATE"
     ) {
       score -= 15;
+
+      reasons.push(
+        "Self-preservation makes risky actions less attractive."
+      );
     }
 
     if (
-      action === "MOVE" ||
+      action === "OBSERVE" ||
+      action === "MOVE"
+    ) {
+      score += 10;
+
+      reasons.push(
+        "The character prefers actions that preserve safety."
+      );
+    }
+  }
+
+  /*
+   * PROTECTION
+   */
+
+  const protection =
+    getMotiveStrength(
+      mind,
+      "PROTECTION"
+    );
+
+  if (
+    protection >= 80
+  ) {
+    if (
+      action === "WAIT" ||
+      action === "OBSERVE"
+    ) {
+      score += 8;
+
+      reasons.push(
+        "Protection makes cautious actions more attractive."
+      );
+    }
+  }
+
+  /*
+   * CURIOSITY
+   */
+
+  const curiosity =
+    getMotiveStrength(
+      mind,
+      "CURIOSITY"
+    );
+
+  if (
+    curiosity >= 70
+  ) {
+    if (
+      action === "INVESTIGATE" ||
+      action === "SEARCH" ||
       action === "OBSERVE"
     ) {
       score += 10;
+
+      reasons.push(
+        "Curiosity increases the value of gathering information."
+      );
     }
+  }
+
+  /*
+   * LOYALTY
+   */
+
+  const loyalty =
+    getMotiveStrength(
+      mind,
+      "LOYALTY"
+    );
+
+  if (
+    loyalty >= 70 &&
+    action === "TALK"
+  ) {
+    score += 5;
+
+    reasons.push(
+      "Loyalty encourages maintaining important relationships."
+    );
+  }
+
+  /*
+   * FEAR
+   */
+
+  const fear =
+    getMotiveStrength(
+      mind,
+      "FEAR"
+    );
+
+  if (
+    fear >= 80
+  ) {
+    if (
+      action === "FOLLOW" ||
+      action === "INVESTIGATE"
+    ) {
+      score -= 10;
+
+      reasons.push(
+        "Fear discourages actions that could expose the character."
+      );
+    }
+
+    if (
+      action === "WAIT"
+    ) {
+      score += 5;
+    }
+  }
+
+  /*
+   * MAKE SURE THE SCORE
+   * IS ALWAYS USABLE.
+   */
+
+  if (
+    score !== -Infinity
+  ) {
+    score = Math.round(
+      score
+    );
+  }
+
+  /*
+   * FALLBACK REASON
+   */
+
+  if (
+    reasons.length === 0
+  ) {
+    reasons.push(
+      "The action is currently the most useful legal option."
+    );
   }
 
   return {
     action,
-    reason,
+    reason:
+      reasons.join(" "),
     score,
   };
 }
