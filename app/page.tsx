@@ -8,6 +8,8 @@ type CharacterUpdate = {
   reason: string;
   new_knowledge: string;
   relationship_change: string;
+  emotional_change: string;
+  new_priority: string;
 };
 
 type SimulationResult = {
@@ -19,18 +21,23 @@ type SimulationResult = {
   next_tension: string;
 };
 
+type Character = {
+  name: string;
+  personality: string;
+  goal: string;
+  fear: string;
+  current_priority: string;
+  emotional_state: string;
+  secret: string;
+  relationship: string;
+  knowledge: string[];
+};
+
 type WorldState = {
   day: number;
   location: string;
   situation: string;
-  characters: Array<{
-    name: string;
-    personality: string;
-    goal: string;
-    secret: string;
-    relationship: string;
-    knowledge: string[];
-  }>;
+  characters: Character[];
   events: string[];
 };
 
@@ -44,6 +51,10 @@ const initialWorld: WorldState = {
       name: "Zara",
       personality: "Ambitious, observant, suspicious and brave.",
       goal: "Discover what the mysterious company is really doing.",
+      fear:
+        "The company will hurt innocent students and discover her investigation.",
+      current_priority: "Find concrete evidence against the company.",
+      emotional_state: "Suspicious but determined.",
       secret: "She has already collected evidence against the company.",
       relationship: "She trusts Daniel deeply.",
       knowledge: [
@@ -55,6 +66,10 @@ const initialWorld: WorldState = {
       name: "Daniel",
       personality: "Charming, ambitious, intelligent and conflicted.",
       goal: "Become financially successful while protecting Zara.",
+      fear: "The company will harm his family if he disobeys.",
+      current_priority:
+        "Protect his family without betraying Zara.",
+      emotional_state: "Conflicted and afraid.",
       secret:
         "The company has offered him ₦5 million to identify students investigating it.",
       relationship:
@@ -71,7 +86,7 @@ const initialWorld: WorldState = {
 };
 
 export default function Home() {
-  const [world, setWorld] = useState(initialWorld);
+  const [world, setWorld] = useState<WorldState>(initialWorld);
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [intervention, setIntervention] = useState("");
   const [loading, setLoading] = useState(false);
@@ -127,8 +142,9 @@ export default function Home() {
           <h1>Let the story live.</h1>
 
           <p className="subtitle">
-            Create a world, give its characters goals and secrets, then watch
-            them make decisions you did not explicitly tell them to make.
+            Create a world, give its characters goals, fears and secrets,
+            then watch them make decisions you did not explicitly tell
+            them to make.
           </p>
         </header>
 
@@ -166,7 +182,7 @@ export default function Home() {
 
           <div className="timeline">
             {world.events.map((event, index) => (
-              <article className="event" key={index}>
+              <article className="event" key={`${event}-${index}`}>
                 <span className="event-number">{index + 1}</span>
                 <p>{event}</p>
               </article>
@@ -184,12 +200,12 @@ export default function Home() {
 
             <div className="events">
               {result.events.map((event, index) => (
-                <p key={index}>• {event}</p>
+                <p key={`${event}-${index}`}>• {event}</p>
               ))}
             </div>
 
             <div className="characters">
-              <span className="label">CHARACTER ACTIONS</span>
+              <span className="label">CHARACTER DECISIONS</span>
 
               {result.character_updates.map((character) => (
                 <article
@@ -201,18 +217,34 @@ export default function Home() {
                   <p>{character.action}</p>
 
                   <small>
-                    Reason: {character.reason}
+                    <strong>Reason:</strong> {character.reason}
                   </small>
 
                   {character.new_knowledge && (
                     <small>
-                      New knowledge: {character.new_knowledge}
+                      <strong>New knowledge:</strong>{" "}
+                      {character.new_knowledge}
                     </small>
                   )}
 
                   {character.relationship_change && (
                     <small>
-                      Relationship: {character.relationship_change}
+                      <strong>Relationship:</strong>{" "}
+                      {character.relationship_change}
+                    </small>
+                  )}
+
+                  {character.emotional_change && (
+                    <small>
+                      <strong>Emotional state:</strong>{" "}
+                      {character.emotional_change}
+                    </small>
+                  )}
+
+                  {character.new_priority && (
+                    <small>
+                      <strong>New priority:</strong>{" "}
+                      {character.new_priority}
                     </small>
                   )}
                 </article>
@@ -266,4 +298,4 @@ export default function Home() {
       </div>
     </main>
   );
-}
+    }
