@@ -11,15 +11,12 @@ type Character = {
   id: string;
   name: string;
   role: string;
-
   goal: string;
   fear: string;
   secret: string;
   knowledge: string[];
-
   capabilities: string[];
   resources: string[];
-
   location: string;
   emotionalState: string;
   currentPriority: string;
@@ -29,9 +26,7 @@ type WorldState = {
   day: number;
   location: string;
   situation: string;
-
   characters: Character[];
-
   entities: string[];
   events: string[];
 };
@@ -43,16 +38,10 @@ type Action = {
   description: string;
 };
 
-/* ---------------------------------------------------------
-   INITIAL WORLD
---------------------------------------------------------- */
-
 function createInitialWorld(): WorldState {
   return {
     day: 1,
-
     location: "University of Lagos",
-
     situation:
       "A mysterious technology company has started secretly recruiting students on campus.",
 
@@ -60,85 +49,62 @@ function createInitialWorld(): WorldState {
       {
         id: "zara",
         name: "Zara",
-
         role: "Student investigator",
-
         goal:
           "Discover what the company is doing and whether students are being harmed.",
-
         fear:
           "The company discovers that she is investigating them.",
-
         secret:
           "Zara has already collected evidence about the company.",
-
         knowledge: [
           "The company has been approaching students privately.",
           "Some students who were recruited have stopped talking to their friends."
         ],
-
         capabilities: [
           "observation",
           "investigation",
           "smartphone",
           "student contacts"
         ],
-
         resources: [
           "smartphone",
           "student ID",
           "laptop",
           "student contacts"
         ],
-
         location: "University of Lagos campus",
-
-        emotionalState:
-          "Suspicious but determined",
-
-        currentPriority:
-          "Find more evidence"
+        emotionalState: "Suspicious but determined",
+        currentPriority: "Find more evidence"
       },
 
       {
         id: "daniel",
         name: "Daniel",
-
         role: "Student and company contact",
-
         goal:
           "Protect his family while maintaining financial success.",
-
         fear:
           "The company harms his family if he disobeys them.",
-
         secret:
           "The company offered Daniel ₦5 million to identify student investigators.",
-
         knowledge: [
           "The company knows Zara has been investigating.",
           "The company wants Daniel to identify suspicious students."
         ],
-
         capabilities: [
           "persuasion",
           "hide emotions",
           "student contacts",
           "company communication"
         ],
-
         resources: [
           "smartphone",
           "student ID",
           "company contact",
           "student contacts"
         ],
-
         location: "University of Lagos campus",
-
-        emotionalState:
-          "Conflicted and afraid",
-
+        emotionalState: "Conflicted and afraid",
         currentPriority:
           "Protect his family without betraying Zara"
       }
@@ -157,55 +123,145 @@ function createInitialWorld(): WorldState {
   };
 }
 
-/* ---------------------------------------------------------
-   WORLD NORMALIZATION
---------------------------------------------------------- */
-
-function normalizeWorld(input: unknown): WorldState {
-  if (!input || typeof input !== "object") {
-    return createInitialWorld();
-  }
-
-  const world = input as Partial<WorldState>;
-
-  const initial = createInitialWorld();
+/*
+ * Safely converts whatever the frontend currently sends
+ * into the complete character structure required by
+ * the simulation engine.
+ */
+function normalizeCharacter(
+  input: unknown,
+  fallback: Character
+): Character {
+  const value =
+    input && typeof input === "object"
+      ? (input as Partial<Character>)
+      : {};
 
   return {
-    day:
-      typeof world.day === "number"
-        ? world.day
-        : initial.day,
+    id:
+      typeof value.id === "string"
+        ? value.id
+        : fallback.id,
+
+    name:
+      typeof value.name === "string"
+        ? value.name
+        : fallback.name,
+
+    role:
+      typeof value.role === "string"
+        ? value.role
+        : fallback.role,
+
+    goal:
+      typeof value.goal === "string"
+        ? value.goal
+        : fallback.goal,
+
+    fear:
+      typeof value.fear === "string"
+        ? value.fear
+        : fallback.fear,
+
+    secret:
+      typeof value.secret === "string"
+        ? value.secret
+        : fallback.secret,
+
+    knowledge:
+      Array.isArray(value.knowledge)
+        ? value.knowledge.map(String)
+        : [...fallback.knowledge],
+
+    capabilities:
+      Array.isArray(value.capabilities)
+        ? value.capabilities.map(String)
+        : [...fallback.capabilities],
+
+    resources:
+      Array.isArray(value.resources)
+        ? value.resources.map(String)
+        : [...fallback.resources],
 
     location:
-      typeof world.location === "string"
-        ? world.location
-        : initial.location,
+      typeof value.location === "string"
+        ? value.location
+        : fallback.location,
 
-    situation:
-      typeof world.situation === "string"
-        ? world.situation
-        : initial.situation,
+    emotionalState:
+      typeof value.emotionalState === "string"
+        ? value.emotionalState
+        : fallback.emotionalState,
 
-    characters:
-      Array.isArray(world.characters)
-        ? world.characters as Character[]
-        : initial.characters,
-
-    entities:
-      Array.isArray(world.entities)
-        ? world.entities.map(String)
-        : initial.entities,
-
-    events:
-      Array.isArray(world.events)
-        ? world.events.map(String)
-        : initial.events
+    currentPriority:
+      typeof value.currentPriority === "string"
+        ? value.currentPriority
+        : fallback.currentPriority
   };
 }
 
-/* ---------------------------------------------------------
-   ACTION GENERATION
---------------------------------------------------------- */
+function normalizeWorld(input: unknown): WorldState {
+  const initial = createInitialWorld();
+
+  if (!input || typeof input !== "object") {
+    return initial;
+  }
+
+  const value = input as Partial<WorldState>;
+
+  const incomingCharacters =
+    Array.isArray(value.characters)
+      ? value.characters
+      : [];
+
+  const characters =
+    incomingCharacters.length > 0
+      ? incomingCharacters.map((character, index) => {
+          const fallback =
+            initial.characters.find(
+              item =>
+                item.id ===
+                (character as Partial<Character>)?.id
+            ) ||
+            initial.characters[index] ||
+            initial.characters[0];
+
+          return normalizeCharacter(
+            character,
+            fallback
+          );
+        })
+      : initial.characters;
+
+  return {
+    day:
+      typeof value.day === "number"
+        ? value.day
+        : initial.day,
+
+    location:
+      typeof value.location === "string"
+        ? value.location
+        : initial.location,
+
+    situation:
+      typeof value.situation === "string"
+        ? value.situation
+        : initial.situation,
+
+    characters,
+
+    entities:
+      Array.isArray(value.entities)
+        ? value.entities.map(String)
+        : [...initial.entities],
+
+    events:
+      Array.isArray(value.events)
+        ? value.events.map(String)
+        : [...initial.events]
+  };
+}
 
 function generateLegalActions(
   actor: Character,
@@ -213,51 +269,36 @@ function generateLegalActions(
 ): Action[] {
   const actions: Action[] = [];
 
-  /*
-   * Every character can always wait.
-   */
   actions.push({
     type: "WAIT",
     actorId: actor.id,
-
     description:
       `${actor.name} waits and continues observing the situation.`
   });
 
-  /*
-   * Everyone can observe.
-   */
   actions.push({
     type: "OBSERVE",
     actorId: actor.id,
-
     description:
       `${actor.name} carefully observes the surrounding situation.`
   });
 
-  /*
-   * Investigation is only available to characters
-   * who actually have that capability.
-   */
   const canInvestigate =
     actor.capabilities.some(capability =>
-      capability.toLowerCase().includes("investigat")
+      capability
+        .toLowerCase()
+        .includes("investigat")
     );
 
   if (canInvestigate) {
     actions.push({
       type: "INVESTIGATE",
       actorId: actor.id,
-
       description:
         `${actor.name} investigates the company and searches for evidence.`
     });
   }
 
-  /*
-   * Characters can interact with another character
-   * only if they occupy the same location.
-   */
   const nearbyCharacters =
     world.characters.filter(
       character =>
@@ -270,7 +311,6 @@ function generateLegalActions(
       type: "TALK",
       actorId: actor.id,
       targetId: target.id,
-
       description:
         `${actor.name} talks to ${target.name}.`
     });
@@ -279,7 +319,6 @@ function generateLegalActions(
       type: "FOLLOW",
       actorId: actor.id,
       targetId: target.id,
-
       description:
         `${actor.name} follows ${target.name} discreetly.`
     });
@@ -288,35 +327,26 @@ function generateLegalActions(
   return actions;
 }
 
-/* ---------------------------------------------------------
-   DETERMINISTIC DECISION ENGINE
---------------------------------------------------------- */
-
-/*
- * This is deliberately NOT AI yet.
- *
- * We want to prove that characters can make decisions
- * based on their internal state before introducing an LLM.
- */
-
 function chooseAction(
   actor: Character,
-  legalActions: Action[],
-  world: WorldState
+  legalActions: Action[]
 ): Action {
-  const lowerPriority =
-    actor.currentPriority.toLowerCase();
+  if (legalActions.length === 0) {
+    throw new Error(
+      `No legal actions available for ${actor.name}.`
+    );
+  }
 
-  /*
-   * Zara is actively investigating.
-   */
   if (
     actor.id === "zara" &&
-    lowerPriority.includes("evidence")
+    actor.currentPriority
+      .toLowerCase()
+      .includes("evidence")
   ) {
     const investigation =
       legalActions.find(
-        action => action.type === "INVESTIGATE"
+        action =>
+          action.type === "INVESTIGATE"
       );
 
     if (investigation) {
@@ -324,65 +354,42 @@ function chooseAction(
     }
   }
 
-  /*
-   * Daniel is conflicted about Zara.
-   *
-   * If Zara is nearby, he talks to her rather than
-   * automatically revealing everything.
-   */
   if (actor.id === "daniel") {
-    const talkAction =
+    const talk =
       legalActions.find(
         action =>
           action.type === "TALK" &&
           action.targetId === "zara"
       );
 
-    if (talkAction) {
-      return talkAction;
+    if (talk) {
+      return talk;
     }
   }
 
-  /*
-   * Otherwise observe.
-   */
   const observe =
     legalActions.find(
-      action => action.type === "OBSERVE"
+      action =>
+        action.type === "OBSERVE"
     );
 
-  if (observe) {
-    return observe;
-  }
-
-  return legalActions[0];
+  return observe || legalActions[0];
 }
-
-/* ---------------------------------------------------------
-   ACTION EXECUTION
---------------------------------------------------------- */
 
 function executeAction(
   action: Action,
   world: WorldState
-): {
-  event: string;
-  characterUpdate: {
-    characterId: string;
-    action: string;
-    reason: string;
-    knowledgeGained: string;
-    emotionalChange: string;
-    newPriority: string;
-  };
-} {
+) {
   const actor =
     world.characters.find(
-      character => character.id === action.actorId
+      character =>
+        character.id === action.actorId
     );
 
   if (!actor) {
-    throw new Error("Actor does not exist.");
+    throw new Error(
+      `Actor ${action.actorId} does not exist.`
+    );
   }
 
   const target =
@@ -412,30 +419,28 @@ function executeAction(
         event:
           `${actor.name} investigates the company's activities and discovers another clue.`,
 
-        characterUpdate: {
-          characterId: actor.id,
+        action:
+          `${actor.name} investigates the company's activities.`,
 
-          action:
-            `${actor.name} investigates the company's activities.`,
+        reason:
+          `${actor.name} wants to ${actor.goal.toLowerCase()}.`,
 
-          reason:
-            `${actor.name} wants to ${actor.goal.toLowerCase()}.`,
+        knowledge:
+          knowledge,
 
-          knowledgeGained:
-            knowledge,
+        emotionalChange:
+          "Becomes more suspicious and confident.",
 
-          emotionalChange:
-            "Becomes more suspicious and confident.",
-
-          newPriority:
-            actor.currentPriority
-        }
+        priority:
+          actor.currentPriority
       };
     }
 
     case "TALK": {
       if (!target) {
-        throw new Error("Talk target does not exist.");
+        throw new Error(
+          "Talk target does not exist."
+        );
       }
 
       actor.emotionalState =
@@ -445,54 +450,48 @@ function executeAction(
         event:
           `${actor.name} talks to ${target.name}, but neither reveals everything they know.`,
 
-        characterUpdate: {
-          characterId: actor.id,
+        action:
+          `${actor.name} talks to ${target.name}.`,
 
-          action:
-            `${actor.name} talks to ${target.name}.`,
+        reason:
+          `${actor.name} wants information while protecting their own interests.`,
 
-          reason:
-            `${actor.name} wants information while protecting their own interests.`,
+        knowledge:
+          `${actor.name} realizes that ${target.name} is unusually cautious.`,
 
-          knowledgeGained:
-            `${actor.name} learns that ${target.name} is unusually cautious.`,
+        emotionalChange:
+          "Becomes more cautious.",
 
-          emotionalChange:
-            "Becomes more cautious.",
-
-          newPriority:
-            actor.currentPriority
-        }
+        priority:
+          actor.currentPriority
       };
     }
 
     case "FOLLOW": {
       if (!target) {
-        throw new Error("Follow target does not exist.");
+        throw new Error(
+          "Follow target does not exist."
+        );
       }
 
       return {
         event:
           `${actor.name} quietly follows ${target.name}.`,
 
-        characterUpdate: {
-          characterId: actor.id,
+        action:
+          `${actor.name} follows ${target.name}.`,
 
-          action:
-            `${actor.name} follows ${target.name}.`,
+        reason:
+          `${actor.name} suspects ${target.name} may know something important.`,
 
-          reason:
-            `${actor.name} suspects ${target.name} may know something important.`,
+        knowledge:
+          "",
 
-          knowledgeGained:
-            "",
+        emotionalChange:
+          "Becomes more alert.",
 
-          emotionalChange:
-            "Becomes more alert.",
-
-          newPriority:
-            actor.currentPriority
-        }
+        priority:
+          actor.currentPriority
       };
     }
 
@@ -501,24 +500,20 @@ function executeAction(
         event:
           `${actor.name} observes the surrounding environment without directly intervening.`,
 
-        characterUpdate: {
-          characterId: actor.id,
+        action:
+          `${actor.name} observes the surrounding environment.`,
 
-          action:
-            `${actor.name} observes the surrounding environment.`,
+        reason:
+          `${actor.name} wants to understand what is happening before acting.`,
 
-          reason:
-            `${actor.name} wants to understand what is happening before acting.`,
+        knowledge:
+          "",
 
-          knowledgeGained:
-            "",
+        emotionalChange:
+          "Remains cautious.",
 
-          emotionalChange:
-            "Remains cautious.",
-
-          newPriority:
-            actor.currentPriority
-        }
+        priority:
+          actor.currentPriority
       };
     }
 
@@ -527,32 +522,24 @@ function executeAction(
         event:
           `${actor.name} decides not to act immediately.`,
 
-        characterUpdate: {
-          characterId: actor.id,
+        action:
+          `${actor.name} waits.`,
 
-          action:
-            `${actor.name} waits.`,
+        reason:
+          `${actor.name} decides immediate action could create unnecessary risk.`,
 
-          reason:
-            `${actor.name} decides that immediate action could create unnecessary risk.`,
+        knowledge:
+          "",
 
-          knowledgeGained:
-            "",
+        emotionalChange:
+          "Remains uncertain.",
 
-          emotionalChange:
-            "Remains uncertain.",
-
-          newPriority:
-            actor.currentPriority
-        }
+        priority:
+          actor.currentPriority
       };
     }
   }
 }
-
-/* ---------------------------------------------------------
-   MAIN API
---------------------------------------------------------- */
 
 export async function POST(
   request: NextRequest
@@ -560,19 +547,15 @@ export async function POST(
   try {
     const body = await request.json();
 
-    let world =
+    let world = normalizeWorld(
       body?.world
-        ? normalizeWorld(body.world)
-        : createInitialWorld();
+    );
 
     const intervention =
       typeof body?.intervention === "string"
         ? body.intervention.trim()
         : "";
 
-    /*
-     * Advance exactly one day.
-     */
     world.day += 1;
 
     const dayEvents: string[] = [];
@@ -587,20 +570,12 @@ export async function POST(
       new_priority: string;
     }[] = [];
 
-    /*
-     * User intervention is treated as an event in the world.
-     *
-     * It does NOT automatically force the outcome.
-     */
     if (intervention) {
       dayEvents.push(
-        `The user intervenes: ${intervention}`
+        `The user intervenes in the world: ${intervention}`
       );
     }
 
-    /*
-     * Every character gets exactly one decision.
-     */
     for (const character of world.characters) {
       const legalActions =
         generateLegalActions(
@@ -608,65 +583,41 @@ export async function POST(
           world
         );
 
-      if (legalActions.length === 0) {
-        continue;
-      }
-
       const chosenAction =
         chooseAction(
           character,
-          legalActions,
-          world
+          legalActions
         );
 
-      const outcome =
+      const result =
         executeAction(
           chosenAction,
           world
         );
 
       dayEvents.push(
-        outcome.event
+        result.event
       );
 
       characterUpdates.push({
         name: character.name,
-
-        action:
-          outcome.characterUpdate.action,
-
-        reason:
-          outcome.characterUpdate.reason,
-
-        new_knowledge:
-          outcome.characterUpdate.knowledgeGained,
-
-        relationship_change:
-          "",
-
+        action: result.action,
+        reason: result.reason,
+        new_knowledge: result.knowledge,
+        relationship_change: "",
         emotional_change:
-          outcome.characterUpdate.emotionalChange,
-
-        new_priority:
-          outcome.characterUpdate.newPriority
+          result.emotionalChange,
+        new_priority: result.priority
       });
     }
 
-    /*
-     * Preserve the timeline.
-     */
     world.events = [
       ...world.events,
       ...dayEvents
     ];
 
     world.situation =
-      dayEvents.length > 0
-        ? dayEvents.join(" ")
-        : "The day passes without a major development.";
-
-    const nextTension =
-      "Zara now has more reason to investigate the company, while Daniel must balance his loyalty to the company with his relationship with Zara.";
+      dayEvents.join(" ");
 
     return NextResponse.json(
       {
@@ -690,7 +641,7 @@ export async function POST(
             world.situation,
 
           next_tension:
-            nextTension
+            "Zara is becoming more suspicious of the company, while Daniel is trying to protect himself and his relationship with Zara."
         }
       },
       {
@@ -709,13 +660,11 @@ export async function POST(
     return NextResponse.json(
       {
         success: false,
-
         error:
           "The simulation server encountered an unexpected error."
       },
       {
         status: 500,
-
         headers: {
           "Cache-Control": "no-store"
         }
