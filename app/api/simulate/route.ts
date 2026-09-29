@@ -3,6 +3,12 @@ import Groq from "groq-sdk";
 
 export const runtime = "nodejs";
 
+/*
+=========================================================
+CORE WORLD TYPES
+=========================================================
+*/
+
 type Character = {
   id: string;
   name: string;
@@ -28,12 +34,25 @@ type WorldEntity = {
   location?: string;
 };
 
+type WorldObject = {
+  id: string;
+  name: string;
+  description: string;
+  location: string;
+  owner?: string;
+  hidden?: boolean;
+  discoverable_by?: string[];
+  known_by?: string[];
+  destroyed?: boolean;
+};
+
 type WorldState = {
   day: number;
   location: string;
   situation: string;
   characters: Character[];
   entities: WorldEntity[];
+  objects?: WorldObject[];
   events: string[];
 };
 
@@ -115,9 +134,21 @@ type SelectionResponse = {
   }>;
 };
 
+/*
+=========================================================
+GROQ
+=========================================================
+*/
+
 const groq = new Groq({
   apiKey: process.env.GROQ_API_KEY
 });
+
+/*
+=========================================================
+LOOKUPS
+=========================================================
+*/
 
 function findCharacter(
   world: WorldState,
@@ -143,6 +174,19 @@ function findEntity(
   );
 }
 
+function findObject(
+  world: WorldState,
+  name: string
+) {
+  return (world.objects || []).find(
+    (object) =>
+      object.name.toLowerCase() ===
+        name.toLowerCase() ||
+      object.id.toLowerCase() ===
+        name.toLowerCase()
+  );
+}
+
 function sameLocation(
   actor: Character,
   targetCharacter: Character
@@ -152,6 +196,75 @@ function sameLocation(
     targetCharacter.location.toLowerCase()
   );
 }
+
+function ensureObjects(
+  world: WorldState
+): WorldObject[] {
+  if (!Array.isArray(world.objects)) {
+    world.objects = [];
+  }
+
+  return world.objects;
+}
+
+/*
+=========================================================
+NORMALIZE LEGACY WORLD
+=========================================================
+*/
+
+function normalizeWorld(
+  input: WorldState
+): WorldState {
+  const world: WorldState =
+    structuredClone(input);
+
+  ensureObjects(world);
+
+  /*
+   * Existing character resources are treated
+   * as possessions, but NOT as newly invented
+   * plot objects.
+   *
+   * This allows the current app to keep working
+   * while we transition to explicit objects.
+   */
+
+  for (const character of world.characters) {
+    for (const resource of character.resources) {
+      const exists = world.objects?.some(
+        (object) =>
+          object.name.toLowerCase() ===
+            resource.toLowerCase() &&
+          object.owner?.toLowerCase() ===
+            character.name.toLowerCase()
+      );
+
+      if (!exists) {
+        world.objects!.push({
+          id: `${character.id}-${resource
+            .toLowerCase()
+            .replace(/\s+/g, "-")}`,
+          name: resource,
+          description: `${resource} belonging to ${character.name}.`,
+          location: character.location,
+          owner: character.name,
+          hidden: false,
+          discoverable_by: [character.name],
+          known_by: [character.name]
+        });
+      }
+    }
+  }
+
+  return world;
+}
+
+/*
+=========================================================
+ACTION VALIDATION
+=========================================================
+*/
 
 function validateAction(
   world: WorldState,
@@ -183,12 +296,18 @@ function validateAction(
       action.target
     );
 
+  const targetObject =
+    findObject(
+      world,
+      action.target
+    );
+
   const targetExists =
     Boolean(targetCharacter) ||
     Boolean(targetEntity) ||
+    Boolean(targetObject) ||
     action.target === "" ||
-    action.target.toLowerCase() ===
-      "self";
+    action.target.toLowerCase() === "self";
 
   if (!targetExists) {
     return {
@@ -248,7 +367,7 @@ function validateAction(
         ...action,
         result: "failure",
         consequence:
-          "Movement requires an existing location as its target."
+          "Movement requires an existing location."
       };
     }
   }
@@ -261,22 +380,16 @@ function validateAction(
     action.action_type ===
       "investigate" &&
     !(
-      capabilities.includes(
-        "investigat"
-      ) ||
-      capabilities.includes(
-        "observ"
-      ) ||
-      capabilities.includes(
-        "research"
-      )
+      capabilities.includes("investigat") ||
+      capabilities.includes("observ") ||
+      capabilities.includes("research")
     )
   ) {
     return {
       ...action,
       result: "failure",
       consequence:
-        `${actor.name} lacks a suitable investigation or observation capability.`
+        `${actor.name} does not have a suitable investigation capability.`
     };
   }
 
@@ -288,23 +401,41 @@ function validateAction(
     action.action_type ===
       "search" &&
     !(
-      capabilities.includes(
-        "investigat"
-      ) ||
-      capabilities.includes(
-        "observ"
-      ) ||
-      capabilities.includes(
-        "search"
-      )
+      capabilities.includes("investigat") ||
+      capabilities.includes("observ") ||
+      capabilities.includes("search")
     )
   ) {
     return {
       ...action,
       result: "failure",
       consequence:
-        `${actor.name} lacks a suitable search capability.`
+        `${actor.name} does not have a suitable search capability.`
     };
+  }
+
+  /*
+   * SEARCH OBJECT LOCATION
+   */
+
+  if (
+    action.action_type === "search" &&
+    targetObject
+  ) {
+    const objectLocation =
+      targetObject.location.toLowerCase();
+
+    if (
+      actor.location.toLowerCase() !==
+      objectLocation
+    ) {
+      return {
+        ...action,
+        result: "failure",
+        consequence:
+          `${actor.name} cannot search ${targetObject.name} because it is not at the same location.`
+      };
+    }
   }
 
   /*
@@ -312,15 +443,14 @@ function validateAction(
    */
 
   if (
-    action.action_type ===
-      "follow"
+    action.action_type === "follow"
   ) {
     if (!targetCharacter) {
       return {
         ...action,
         result: "failure",
         consequence:
-          "Following requires an existing character as the target."
+          "Following requires an existing character."
       };
     }
   }
@@ -330,20 +460,13 @@ function validateAction(
    */
 
   if (
-    action.action_type ===
-      "contact"
+    action.action_type === "contact"
   ) {
     if (
       !(
-        resources.includes(
-          "phone"
-        ) ||
-        resources.includes(
-          "smartphone"
-        ) ||
-        resources.includes(
-          "laptop"
-        )
+        resources.includes("phone") ||
+        resources.includes("smartphone") ||
+        resources.includes("laptop")
       )
     ) {
       return {
@@ -361,36 +484,126 @@ function validateAction(
 
   if (
     (
-      action.action_type ===
-        "destroy" ||
-      action.action_type ===
-        "steal"
+      action.action_type === "destroy" ||
+      action.action_type === "steal"
     ) &&
-    !action.target
+    !targetObject
   ) {
     return {
       ...action,
       result: "failure",
       consequence:
-        "The action requires an explicit existing target."
+        "This action requires an existing world object as its target."
     };
+  }
+
+  /*
+   * STEAL LOCATION CHECK
+   */
+
+  if (
+    action.action_type === "steal" &&
+    targetObject
+  ) {
+    if (
+      actor.location.toLowerCase() !==
+      targetObject.location.toLowerCase()
+    ) {
+      return {
+        ...action,
+        result: "failure",
+        consequence:
+          `${actor.name} cannot steal ${targetObject.name} because it is not at the same location.`
+      };
+    }
+  }
+
+  /*
+   * DESTROY LOCATION CHECK
+   */
+
+  if (
+    action.action_type === "destroy" &&
+    targetObject
+  ) {
+    if (
+      actor.location.toLowerCase() !==
+      targetObject.location.toLowerCase()
+    ) {
+      return {
+        ...action,
+        result: "failure",
+        consequence:
+          `${actor.name} cannot destroy ${targetObject.name} because it is not at the same location.`
+      };
+    }
   }
 
   return {
     ...action,
     result: "success",
     consequence:
-      `${actor.name} carried out the proposed action.`
+      `${actor.name} successfully performed the action.`
   };
 }
 
-function applyAction(
+/*
+=========================================================
+STATE TRANSITION HELPERS
+=========================================================
+*/
+
+function addKnowledge(
+  character: Character,
+  knowledge: string
+) {
+  const normalized =
+    knowledge.trim().toLowerCase();
+
+  if (!normalized) {
+    return;
+  }
+
+  const exists =
+    character.knowledge.some(
+      (item) =>
+        item.trim().toLowerCase() ===
+        normalized
+    );
+
+  if (!exists) {
+    character.knowledge.push(
+      knowledge.trim()
+    );
+  }
+}
+
+function addEvent(
+  world: WorldState,
+  event: string
+) {
+  const clean =
+    event.trim();
+
+  if (!clean) {
+    return;
+  }
+
+  world.events.push(clean);
+}
+
+/*
+=========================================================
+DETERMINISTIC ACTION EXECUTOR
+=========================================================
+*/
+
+function executeAction(
   world: WorldState,
   action: ValidatedAction
 ) {
   if (
-    action.result !==
-    "success"
+    action.result === "failure"
   ) {
     return;
   }
@@ -405,27 +618,41 @@ function applyAction(
     return;
   }
 
+  const targetCharacter =
+    findCharacter(
+      world,
+      action.target
+    );
+
+  const targetEntity =
+    findEntity(
+      world,
+      action.target
+    );
+
+  const targetObject =
+    findObject(
+      world,
+      action.target
+    );
+
   /*
    * MOVE
    */
 
   if (
-    action.action_type ===
-    "move"
+    action.action_type === "move" &&
+    targetEntity?.type === "location"
   ) {
-    const destination =
-      findEntity(
-        world,
-        action.target
-      );
+    actor.location =
+      targetEntity.name;
 
-    if (
-      destination?.type ===
-      "location"
-    ) {
-      actor.location =
-        destination.name;
-    }
+    addEvent(
+      world,
+      `${actor.name} moved to ${targetEntity.name}.`
+    );
+
+    return;
   }
 
   /*
@@ -433,28 +660,322 @@ function applyAction(
    */
 
   if (
-    action.action_type ===
-    "follow"
+    action.action_type === "follow" &&
+    targetCharacter
   ) {
-    const target =
-      findCharacter(
-        world,
-        action.target
-      );
+    actor.location =
+      targetCharacter.location;
 
-    if (target) {
-      actor.location =
-        target.location;
+    addEvent(
+      world,
+      `${actor.name} followed ${targetCharacter.name} to ${targetCharacter.location}.`
+    );
+
+    addKnowledge(
+      actor,
+      `${targetCharacter.name} is currently at ${targetCharacter.location}.`
+    );
+
+    return;
+  }
+
+  /*
+   * OBSERVE
+   */
+
+  if (
+    action.action_type === "observe"
+  ) {
+    addKnowledge(
+      actor,
+      `Observed the current surroundings at ${actor.location}.`
+    );
+
+    addEvent(
+      world,
+      `${actor.name} observed the surroundings at ${actor.location}.`
+    );
+
+    return;
+  }
+
+  /*
+   * TALK
+   */
+
+  if (
+    action.action_type === "talk" &&
+    targetCharacter
+  ) {
+    addKnowledge(
+      actor,
+      `${targetCharacter.name} was available to speak with at ${actor.location}.`
+    );
+
+    addEvent(
+      world,
+      `${actor.name} spoke with ${targetCharacter.name}.`
+    );
+
+    return;
+  }
+
+  /*
+   * CONFRONT
+   */
+
+  if (
+    action.action_type === "confront" &&
+    targetCharacter
+  ) {
+    addEvent(
+      world,
+      `${actor.name} confronted ${targetCharacter.name}.`
+    );
+
+    addKnowledge(
+      actor,
+      `${targetCharacter.name} was directly confronted about the current situation.`
+    );
+
+    return;
+  }
+
+  /*
+   * LIE
+   */
+
+  if (
+    action.action_type === "lie" &&
+    targetCharacter
+  ) {
+    addEvent(
+      world,
+      `${actor.name} deliberately misled ${targetCharacter.name}.`
+    );
+
+    addKnowledge(
+      actor,
+      `${actor.name} chose to conceal information from ${targetCharacter.name}.`
+    );
+
+    return;
+  }
+
+  /*
+   * INVESTIGATE
+   */
+
+  if (
+    action.action_type === "investigate"
+  ) {
+    const targetName =
+      action.target ||
+      actor.location;
+
+    addKnowledge(
+      actor,
+      `Investigated ${targetName}.`
+    );
+
+    addEvent(
+      world,
+      `${actor.name} investigated ${targetName}.`
+    );
+
+    return;
+  }
+
+  /*
+   * SEARCH
+   */
+
+  if (
+    action.action_type === "search"
+  ) {
+    if (targetObject) {
+      if (
+        targetObject.hidden &&
+        !(
+          targetObject.discoverable_by ||
+          []
+        ).some(
+          (name) =>
+            name.toLowerCase() ===
+            actor.name.toLowerCase()
+        )
+      ) {
+        addEvent(
+          world,
+          `${actor.name} searched ${targetObject.name} but did not discover its hidden contents.`
+        );
+
+        return;
+      }
+
+      if (
+        !targetObject.destroyed
+      ) {
+        targetObject.known_by =
+          targetObject.known_by || [];
+
+        if (
+          !targetObject.known_by.includes(
+            actor.name
+          )
+        ) {
+          targetObject.known_by.push(
+            actor.name
+          );
+        }
+
+        addKnowledge(
+          actor,
+          `${targetObject.name} exists at ${targetObject.location}.`
+        );
+
+        addEvent(
+          world,
+          `${actor.name} searched ${targetObject.name}.`
+        );
+      }
+
+      return;
     }
+
+    addEvent(
+      world,
+      `${actor.name} searched the area at ${actor.location}.`
+    );
+
+    addKnowledge(
+      actor,
+      `Searched the area at ${actor.location}.`
+    );
+
+    return;
+  }
+
+  /*
+   * CONTACT
+   */
+
+  if (
+    action.action_type === "contact" &&
+    targetCharacter
+  ) {
+    addEvent(
+      world,
+      `${actor.name} contacted ${targetCharacter.name}.`
+    );
+
+    addKnowledge(
+      actor,
+      `${targetCharacter.name} can be contacted through their known communication resources.`
+    );
+
+    return;
+  }
+
+  /*
+   * PROTECT
+   */
+
+  if (
+    action.action_type === "protect"
+  ) {
+    addEvent(
+      world,
+      `${actor.name} took steps to protect ${action.target || "themselves"}.`
+    );
+
+    return;
+  }
+
+  /*
+   * WAIT
+   */
+
+  if (
+    action.action_type === "wait"
+  ) {
+    addEvent(
+      world,
+      `${actor.name} chose to wait rather than take a major action.`
+    );
+
+    return;
+  }
+
+  /*
+   * STEAL
+   */
+
+  if (
+    action.action_type === "steal" &&
+    targetObject
+  ) {
+    targetObject.owner =
+      actor.name;
+
+    targetObject.location =
+      actor.location;
+
+    targetObject.known_by =
+      targetObject.known_by || [];
+
+    if (
+      !targetObject.known_by.includes(
+        actor.name
+      )
+    ) {
+      targetObject.known_by.push(
+        actor.name
+      );
+    }
+
+    addKnowledge(
+      actor,
+      `${targetObject.name} is now in my possession.`
+    );
+
+    addEvent(
+      world,
+      `${actor.name} took ${targetObject.name}.`
+    );
+
+    return;
+  }
+
+  /*
+   * DESTROY
+   */
+
+  if (
+    action.action_type === "destroy" &&
+    targetObject
+  ) {
+    targetObject.destroyed = true;
+
+    addEvent(
+      world,
+      `${actor.name} destroyed ${targetObject.name}.`
+    );
+
+    return;
   }
 }
+
+/*
+=========================================================
+NORMALIZE ACTION
+=========================================================
+*/
 
 function normalizeAction(
   action: ProposedAction,
   candidateId: string,
-  source:
-    | "character"
-    | "intervention"
+  source: "character" | "intervention"
 ): ProposedAction {
   return {
     actor:
@@ -479,6 +1000,12 @@ function normalizeAction(
   };
 }
 
+/*
+=========================================================
+POST
+=========================================================
+*/
+
 export async function POST(
   request: Request
 ) {
@@ -500,8 +1027,22 @@ export async function POST(
     const body =
       await request.json();
 
-    const world: WorldState =
-      body.world;
+    if (!body.world) {
+      return NextResponse.json(
+        {
+          error:
+            "A world state is required."
+        },
+        {
+          status: 400
+        }
+      );
+    }
+
+    let world =
+      normalizeWorld(
+        body.world as WorldState
+      );
 
     const intervention =
       typeof body.intervention ===
@@ -510,7 +1051,6 @@ export async function POST(
         : "";
 
     if (
-      !world ||
       !Array.isArray(
         world.characters
       ) ||
@@ -524,7 +1064,7 @@ export async function POST(
       return NextResponse.json(
         {
           error:
-            "A valid world state is required."
+            "Invalid world state."
         },
         {
           status: 400
@@ -533,27 +1073,24 @@ export async function POST(
     }
 
     /*
-     * =========================================================
-     * STEP 1
-     *
-     * GENERATE MULTIPLE POSSIBLE ACTIONS
-     * =========================================================
-     */
+    =======================================================
+    STEP 1
+    GENERATE CANDIDATE ACTIONS
+    =======================================================
+    */
 
     const candidatePrompt = `
-You are the candidate-action layer of a persistent world simulator.
+You are the decision-candidate layer of a persistent world simulator.
 
-Your job is to generate 3 plausible actions for EACH existing character.
+You DO NOT write the story.
 
-You are NOT the narrator.
+You DO NOT create consequences.
 
-You are NOT allowed to create world facts.
+You DO NOT create new world entities.
 
-You are NOT allowed to decide what ultimately happens.
+You only propose possible actions that existing characters could attempt.
 
-==================================================
-CURRENT WORLD
-==================================================
+CURRENT WORLD:
 
 ${JSON.stringify(
   world,
@@ -561,105 +1098,75 @@ ${JSON.stringify(
   2
 )}
 
-==================================================
-USER INTERVENTION
-==================================================
+USER INTERVENTION:
 
-${
-  intervention ||
-  "None"
-}
+${intervention || "None"}
 
-==================================================
-CLOSED-WORLD RULES
-==================================================
+STRICT CLOSED-WORLD RULES:
 
-Use ONLY characters and entities already present.
+1. Only existing characters may act.
 
-Never create:
+2. Only existing entities may be targets.
 
-- new people
-- new organizations
-- new locations
-- new objects
-- new devices
-- new evidence
-- journalists
-- police officers
-- professors
-- students
-- security guards
+3. Only existing objects may be targeted.
+
+4. Never create:
+- people
+- objects
+- organizations
+- locations
+- evidence
+- money
+- documents
+- USB drives
 - cameras
-- newspapers
+- security
+- journalists
+- professors
 - buildings
-- company representatives
+- meetings
+- messages
+- files
 
-unless they already exist in the world.
+unless they already exist in the supplied world.
 
-Do not assume an unnamed person exists.
+5. A character cannot magically obtain information.
 
-A target must be an existing character/entity or empty string.
+6. A character's secret is NOT automatically known by other characters.
 
-Do not give a character knowledge they do not already have.
+7. A character may only use known capabilities and resources.
 
-Do not use another character's secret as public knowledge.
+8. Ordinary actions are valid.
 
-Do not make every option dramatic.
+9. Waiting is valid.
 
-Ordinary actions are valid.
+10. Characters do not need to create drama.
 
-Examples:
+For every character produce exactly 3 possible actions.
 
-- wait
-- observe
-- stay where they are
-- continue working
-- avoid someone
-- think
-- move somewhere already known
-- talk to an existing character
-- investigate something already known
-- protect someone
-- change plans
+Candidate 1:
+lowest-risk plausible action.
 
-The character must act according to:
+Candidate 2:
+goal-directed plausible action.
 
+Candidate 3:
+riskier or more aggressive plausible action.
+
+The actions should be based on:
+
+- personality
 - goal
 - fear
 - current priority
 - emotional state
-- personality
 - knowledge
 - capabilities
 - resources
 - relationships
+- current location
 
-==================================================
-CANDIDATE STRUCTURE
-==================================================
-
-For every character produce exactly 3 candidates.
-
-Candidate 1:
-The safest / lowest-risk plausible action.
-
-Candidate 2:
-The goal-directed plausible action.
-
-Candidate 3:
-The more aggressive, uncertain or risky plausible action.
-
-Do NOT choose between them.
-
-If a USER INTERVENTION exists, translate it into ONE proposed action using only existing characters/entities.
-
-If it cannot be represented safely, return null.
-
-==================================================
-OUTPUT
-==================================================
-
-Return ONLY valid JSON:
+Return ONLY JSON:
 
 {
   "candidates": [
@@ -668,9 +1175,9 @@ Return ONLY valid JSON:
       "actions": [
         {
           "action_type": "observe | move | talk | investigate | search | protect | lie | follow | wait | contact | destroy | steal | confront",
-          "target": "existing character/entity or empty string",
-          "description": "what the character attempts",
-          "reason": "why this is plausible from their current state"
+          "target": "existing target or empty string",
+          "description": "specific attempted action",
+          "reason": "why this character would plausibly choose it"
         },
         {
           "action_type": "...",
@@ -686,45 +1193,35 @@ Return ONLY valid JSON:
         }
       ]
     }
-  ],
-  "intervention_action": null
+  ]
 }
-
-Never invent entities.
 `;
 
     const candidateCompletion =
-      await groq.chat.completions.create(
-        {
-          model:
-            "openai/gpt-oss-120b",
+      await groq.chat.completions.create({
+        model:
+          "openai/gpt-oss-120b",
 
-          temperature:
-            0.65,
+        temperature:
+          0.55,
 
-          response_format: {
-            type: "json_object"
+        response_format: {
+          type: "json_object"
+        },
+
+        messages: [
+          {
+            role: "system",
+            content:
+              "Generate possible actions only. Never generate world events or consequences."
           },
-
-          messages: [
-            {
-              role:
-                "system",
-
-              content:
-                "Generate constrained candidate actions only. The world state is the source of truth."
-            },
-
-            {
-              role:
-                "user",
-
-              content:
-                candidatePrompt
-            }
-          ]
-        }
-      );
+          {
+            role: "user",
+            content:
+              candidatePrompt
+          }
+        ]
+      });
 
     const candidateContent =
       candidateCompletion
@@ -732,11 +1229,9 @@ Never invent entities.
         ?.message
         ?.content;
 
-    if (
-      !candidateContent
-    ) {
+    if (!candidateContent) {
       throw new Error(
-        "Candidate engine returned an empty response."
+        "Candidate engine returned no response."
       );
     }
 
@@ -749,9 +1244,8 @@ Never invent entities.
       ProposedAction[] = [];
 
     for (
-      const group
-      of candidateData.candidates ||
-      []
+      const group of
+      candidateData.candidates || []
     ) {
       const actor =
         findCharacter(
@@ -779,14 +1273,13 @@ Never invent entities.
               normalizeAction(
                 {
                   actor:
-                    group.actor,
+                    actor.name,
 
                   action_type:
                     action.action_type,
 
                   target:
-                    action.target ||
-                    "",
+                    action.target || "",
 
                   description:
                     action.description,
@@ -795,9 +1288,7 @@ Never invent entities.
                     action.reason
                 },
 
-                `${actor.id}-candidate-${
-                  index + 1
-                }`,
+                `${actor.id}-candidate-${index + 1}`,
 
                 "character"
               )
@@ -807,12 +1298,11 @@ Never invent entities.
     }
 
     /*
-     * =========================================================
-     * STEP 2
-     *
-     * VALIDATE EVERY CANDIDATE
-     * =========================================================
-     */
+    =======================================================
+    STEP 2
+    VALIDATE EVERY CANDIDATE
+    =======================================================
+    */
 
     const validatedCandidates =
       candidates.map(
@@ -824,21 +1314,20 @@ Never invent entities.
       );
 
     /*
-     * =========================================================
-     * STEP 3
-     *
-     * INDEPENDENT DECISION
-     * =========================================================
-     */
+    =======================================================
+    STEP 3
+    SELECT ONE ACTION PER CHARACTER
+    =======================================================
+    */
 
     const selectionPrompt = `
-You are the decision-selection layer of a persistent world simulator.
+You are the decision-selection layer.
 
-Choose ONE VALID candidate for each character.
+Select ONE action for each character from the supplied VALIDATED CANDIDATES.
 
-==================================================
-CURRENT WORLD
-==================================================
+Do not invent actions.
+
+CURRENT WORLD:
 
 ${JSON.stringify(
   world,
@@ -846,9 +1335,7 @@ ${JSON.stringify(
   2
 )}
 
-==================================================
-VALIDATED CANDIDATES
-==================================================
+VALIDATED CANDIDATES:
 
 ${JSON.stringify(
   validatedCandidates,
@@ -856,48 +1343,16 @@ ${JSON.stringify(
   2
 )}
 
-==================================================
-RULES
-==================================================
+Rules:
 
-Select ONLY candidate_id values that actually appear.
-
-Select exactly ONE candidate for each character when possible.
-
-Never invent an action.
-
-Base the decision on:
-
-- goal
-- fear
-- current priority
-- emotional state
-- personality
-- knowledge
-- capabilities
-- resources
-- relationships
-- recent events
-
-Characters make decisions independently.
-
-Do not choose the most dramatic option simply because it creates a better story.
-
-Different characters can make conflicting decisions.
-
-Characters can choose ordinary actions.
-
-A character may choose to wait.
-
-A character may choose to do nothing.
-
-A character may choose a low-risk action.
-
-The simulation does not need a dramatic event every day.
-
-==================================================
-OUTPUT
-==================================================
+- Choose only existing candidate_id values.
+- Choose one action per character.
+- Prefer behavior consistent with the character's actual state.
+- Do not select an action simply because it creates drama.
+- Waiting is valid.
+- Characters can make conflicting decisions.
+- Characters can choose low-risk actions.
+- The story does not need a major event every day.
 
 Return ONLY JSON:
 
@@ -912,37 +1367,30 @@ Return ONLY JSON:
 `;
 
     const selectionCompletion =
-      await groq.chat.completions.create(
-        {
-          model:
-            "openai/gpt-oss-120b",
+      await groq.chat.completions.create({
+        model:
+          "openai/gpt-oss-120b",
 
-          temperature:
-            0.55,
+        temperature:
+          0.45,
 
-          response_format: {
-            type: "json_object"
+        response_format: {
+          type: "json_object"
+        },
+
+        messages: [
+          {
+            role: "system",
+            content:
+              "Select existing candidate actions only."
           },
-
-          messages: [
-            {
-              role:
-                "system",
-
-              content:
-                "Select from existing candidates only. Never invent actions."
-            },
-
-            {
-              role:
-                "user",
-
-              content:
-                selectionPrompt
-            }
-          ]
-        }
-      );
+          {
+            role: "user",
+            content:
+              selectionPrompt
+          }
+        ]
+      });
 
     const selectionContent =
       selectionCompletion
@@ -950,11 +1398,9 @@ Return ONLY JSON:
         ?.message
         ?.content;
 
-    if (
-      !selectionContent
-    ) {
+    if (!selectionContent) {
       throw new Error(
-        "Decision selector returned an empty response."
+        "Decision selector returned no response."
       );
     }
 
@@ -963,32 +1409,25 @@ Return ONLY JSON:
         selectionContent
       ) as SelectionResponse;
 
-    const selectedIds =
-      new Set(
-        (
-          selectionData
-            .selections || []
-        ).map(
-          (
-            selection
-          ) =>
-            selection.candidate_id
-        )
-      );
+    const candidateMap =
+      new Map<
+        string,
+        ProposedAction
+      >();
 
-    const selectedActions =
-      candidates.filter(
-        (candidate) =>
-          candidate.candidate_id &&
-          selectedIds.has(
-            candidate.candidate_id
-          )
-      );
-
-    /*
-     * Guarantee at most one action
-     * per character.
-     */
+    for (
+      const candidate of
+      candidates
+    ) {
+      if (
+        candidate.candidate_id
+      ) {
+        candidateMap.set(
+          candidate.candidate_id,
+          candidate
+        );
+      }
+    }
 
     const selectedByActor =
       new Map<
@@ -997,32 +1436,41 @@ Return ONLY JSON:
       >();
 
     for (
-      const action
-      of selectedActions
+      const selection of
+      selectionData.selections || []
     ) {
+      const candidate =
+        candidateMap.get(
+          selection.candidate_id
+        );
+
+      if (
+        !candidate
+      ) {
+        continue;
+      }
+
       if (
         !selectedByActor.has(
-          action.actor
+          candidate.actor
         )
       ) {
         selectedByActor.set(
-          action.actor,
-          action
+          candidate.actor,
+          candidate
         );
       }
     }
 
     /*
-     * Deterministic fallback.
-     *
-     * If the LLM failed to choose an
-     * action, take the first valid
-     * candidate.
-     */
+    =======================================================
+    FALLBACK
+    =======================================================
+    */
 
     for (
-      const character
-      of world.characters
+      const character of
+      world.characters
     ) {
       if (
         selectedByActor.has(
@@ -1055,12 +1503,11 @@ Return ONLY JSON:
       );
 
     /*
-     * =========================================================
-     * STEP 4
-     *
-     * RE-VALIDATE SELECTED ACTIONS
-     * =========================================================
-     */
+    =======================================================
+    STEP 4
+    FINAL VALIDATION
+    =======================================================
+    */
 
     const validatedActions =
       proposedActions.map(
@@ -1072,50 +1519,54 @@ Return ONLY JSON:
       );
 
     /*
-     * =========================================================
-     * STEP 5
-     *
-     * EXECUTE WORLD CHANGES IN CODE
-     * =========================================================
-     *
-     * The LLM cannot mutate the world.
-     */
+    =======================================================
+    STEP 5
+    EXECUTE ACTIONS
+    =======================================================
+    */
 
-    const updatedWorld:
-      WorldState =
+    const updatedWorld =
       structuredClone(world);
 
     for (
-      const action
-      of validatedActions
+      const action of
+      validatedActions
     ) {
-      applyAction(
+      executeAction(
         updatedWorld,
         action
       );
     }
 
     /*
-     * =========================================================
-     * STEP 6
+    =======================================================
+    STEP 6
+    DETERMINE CHARACTER STATE CHANGES
+    =======================================================
+    */
+
+    /*
+     * We allow the LLM to suggest interpretation,
+     * but NOT to directly mutate the world.
      *
-     * NARRATION ONLY
-     * =========================================================
-     *
-     * The model is now only describing
-     * what already happened.
+     * The actual knowledge already changed above.
      */
 
-    const narrationPrompt = `
-You are the narration layer of a persistent world simulator.
+    const statePrompt = `
+You are describing the state changes that resulted from
+actions that have ALREADY happened.
 
-The simulation has ALREADY happened.
+You cannot create new events.
 
-Your job is ONLY to describe what happened.
+You cannot create new knowledge.
 
-==================================================
-WORLD BEFORE
-==================================================
+You cannot create new objects.
+
+You cannot create new people.
+
+You cannot create new locations.
+
+WORLD BEFORE:
 
 ${JSON.stringify(
   world,
@@ -1123,9 +1574,7 @@ ${JSON.stringify(
   2
 )}
 
-==================================================
-VALIDATED ACTIONS
-==================================================
+VALIDATED ACTIONS:
 
 ${JSON.stringify(
   validatedActions,
@@ -1133,9 +1582,7 @@ ${JSON.stringify(
   2
 )}
 
-==================================================
-WORLD AFTER
-==================================================
+WORLD AFTER:
 
 ${JSON.stringify(
   updatedWorld,
@@ -1143,201 +1590,141 @@ ${JSON.stringify(
   2
 )}
 
-==================================================
-STRICT CLOSED-WORLD RULES
-==================================================
+Only describe changes supported by WORLD AFTER.
 
-The validated actions are the ONLY actions that happened.
+For each character return:
 
-The WORLD AFTER state is authoritative.
+- action
+- reason
+- new_knowledge
+- relationship_change
+- emotional_change
+- new_priority
 
-DO NOT invent:
-
-- people
-- organizations
-- locations
-- objects
-- devices
-- evidence
-- journalists
-- newspapers
-- police
-- security guards
-- professors
-- cameras
-- USB drives
-- documents
-- company representatives
-- anonymous tips
-- buildings
-- conversations with unknown people
-
-unless they already exist in the world.
-
-Do not introduce new plot devices.
-
-Do not invent an event simply because it would make the story more exciting.
-
-Do not turn a failed action into a successful action.
-
-Do not give characters information they did not obtain.
-
-Do not create knowledge from nowhere.
-
-It is completely acceptable for very little to happen.
-
-The simulation should feel like a real world, not a screenplay.
-
-Maximum 3 events.
-
-==================================================
-OUTPUT
-==================================================
+If no genuine change occurred, return an empty string.
 
 Return ONLY JSON:
 
 {
-  "situation": "short resulting situation",
-
-  "events": [
-    "concrete event that actually happened"
-  ],
-
   "character_updates": [
     {
       "name": "existing character",
-      "action": "what they actually did",
-      "reason": "why they did it",
+      "action": "",
+      "reason": "",
       "new_knowledge": "",
       "relationship_change": "",
       "emotional_change": "",
       "new_priority": ""
     }
   ],
-
-  "new_situation": "short description of the world after the actions",
-
-  "next_tension": "an unresolved tension already supported by the world"
+  "new_situation": "",
+  "next_tension": ""
 }
-
-Never invent anything.
 `;
 
-    const narrationCompletion =
-      await groq.chat.completions.create(
-        {
-          model:
-            "openai/gpt-oss-120b",
+    const stateCompletion =
+      await groq.chat.completions.create({
+        model:
+          "openai/gpt-oss-120b",
 
-          temperature:
-            0.35,
+        temperature:
+          0.25,
 
-          response_format: {
-            type: "json_object"
+        response_format: {
+          type: "json_object"
+        },
+
+        messages: [
+          {
+            role: "system",
+            content:
+              "Describe existing state only. Never invent consequences."
           },
+          {
+            role: "user",
+            content:
+              statePrompt
+          }
+        ]
+      });
 
-          messages: [
-            {
-              role:
-                "system",
-
-              content:
-                "Narrate only established simulation state. Never invent plot elements."
-            },
-
-            {
-              role:
-                "user",
-
-              content:
-                narrationPrompt
-            }
-          ]
-        }
-      );
-
-    const narrationContent =
-      narrationCompletion
+    const stateContent =
+      stateCompletion
         .choices[0]
         ?.message
         ?.content;
 
-    if (
-      !narrationContent
-    ) {
+    if (!stateContent) {
       throw new Error(
-        "Narration engine returned an empty response."
+        "State narration returned no response."
       );
     }
 
-    const narration =
+    const stateData =
       JSON.parse(
-        narrationContent
+        stateContent
       ) as {
-        situation?: string;
-        events?: string[];
         character_updates?: CharacterUpdate[];
         new_situation?: string;
         next_tension?: string;
       };
 
-    const events =
-      Array.isArray(
-        narration.events
-      )
-        ? narration.events
-            .filter(
-              (event) =>
-                typeof event ===
-                  "string" &&
-                event.trim()
-                  .length > 0
-            )
-            .slice(0, 3)
-        : [];
+    /*
+    =======================================================
+    STEP 7
+    BUILD EVENTS FROM ACTUAL ACTIONS
+    =======================================================
+    */
 
-    const characterUpdates =
-      Array.isArray(
-        narration.character_updates
-      )
-        ? narration.character_updates.filter(
-            (update) =>
-              Boolean(
-                findCharacter(
-                  world,
-                  update.name
-                )
-              )
-          )
-        : [];
+    const actionEvents =
+      updatedWorld.events.slice(
+        world.events.length
+      );
 
     /*
-     * IMPORTANT:
-     *
-     * We do NOT apply the LLM's
-     * knowledge/emotion/relationship
-     * changes yet.
-     *
-     * They are presentation only.
-     *
-     * Later we will build explicit
-     * state-transition rules for them.
+     * Only events generated by the
+     * deterministic executor are added.
      */
 
-    const newSituation =
-      narration.new_situation ||
-      world.situation;
+    const safeEvents =
+      actionEvents.slice(0, 20);
+
+    /*
+    =======================================================
+    STEP 8
+    ADVANCE DAY
+    =======================================================
+    */
 
     updatedWorld.day =
       world.day + 1;
 
-    updatedWorld.situation =
-      newSituation;
+    if (
+      stateData.new_situation
+    ) {
+      updatedWorld.situation =
+        stateData.new_situation;
+    }
 
-    updatedWorld.events = [
-      ...world.events,
-      ...events
-    ];
+    /*
+    =======================================================
+    FINAL RESULT
+    =======================================================
+    */
+
+    const characterUpdates =
+      (
+        stateData.character_updates ||
+        []
+      ).filter(
+        (update) =>
+          Boolean(
+            findCharacter(
+              updatedWorld,
+              update.name
+            )
+          )
+      );
 
     const result:
       SimulationResult = {
@@ -1345,8 +1732,7 @@ Never invent anything.
           updatedWorld.day,
 
         situation:
-          narration.situation ||
-          newSituation,
+          updatedWorld.situation,
 
         proposed_actions:
           proposedActions,
@@ -1354,16 +1740,17 @@ Never invent anything.
         validated_actions:
           validatedActions,
 
-        events,
+        events:
+          safeEvents,
 
         character_updates:
           characterUpdates,
 
         new_situation:
-          newSituation,
+          updatedWorld.situation,
 
         next_tension:
-          narration.next_tension ||
+          stateData.next_tension ||
           "The characters continue pursuing their existing goals."
       };
 
