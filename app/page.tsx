@@ -53,6 +53,11 @@ type WorldState = {
   characters: Character[];
   entities: WorldEntity[];
   events: string[];
+
+  // These are maintained by the backend.
+  objects?: unknown[];
+  locations?: unknown[];
+  internalEvents?: unknown[];
 };
 
 const initialWorld: WorldState = {
@@ -201,67 +206,174 @@ const initialWorld: WorldState = {
   ]
 };
 
+function isValidWorld(value: unknown): value is WorldState {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const world = value as Partial<WorldState>;
+
+  return (
+    typeof world.day === "number" &&
+    typeof world.location === "string" &&
+    typeof world.situation === "string" &&
+    Array.isArray(world.characters) &&
+    Array.isArray(world.entities) &&
+    Array.isArray(world.events)
+  );
+}
+
+function isValidResult(value: unknown): value is SimulationResult {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+
+  const result = value as Partial<SimulationResult>;
+
+  return (
+    typeof result.day === "number" &&
+    typeof result.situation === "string" &&
+    Array.isArray(result.events) &&
+    Array.isArray(result.character_updates) &&
+    typeof result.next_tension === "string"
+  );
+}
+
 export default function Home() {
-  const [world, setWorld] = useState<WorldState>(initialWorld);
+  const [world, setWorld] =
+    useState<WorldState>(initialWorld);
 
   const [result, setResult] =
     useState<SimulationResult | null>(null);
 
-  const [intervention, setIntervention] = useState("");
+  const [intervention, setIntervention] =
+    useState("");
 
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] =
+    useState(false);
 
-  const [error, setError] = useState("");
+  const [error, setError] =
+    useState("");
 
-  async function simulate() {
+  async function runSimulation(
+    interventionValue: string
+  ) {
+    if (loading) {
+      return;
+    }
+
     setLoading(true);
     setError("");
 
     try {
-      const response = await fetch("/api/simulate", {
-        method: "POST",
+      const response = await fetch(
+        "/api/simulate",
+        {
+          method: "POST",
 
-        headers: {
-          "Content-Type": "application/json"
-        },
+          headers: {
+            "Content-Type": "application/json"
+          },
 
-        body: JSON.stringify({
-          world,
-          intervention
-        })
-      });
+          body: JSON.stringify({
+            world,
+            intervention: interventionValue
+          })
+        }
+      );
 
-      const data = await response.json();
+      let data: unknown;
 
-      if (!response.ok) {
+      try {
+        data = await response.json();
+      } catch {
         throw new Error(
-          data.error || "Simulation failed"
+          "The simulation server returned an invalid response."
         );
       }
 
-      setWorld(data.world);
+      if (!response.ok) {
+        const serverData =
+          data as {
+            error?: string;
+          };
 
-      setResult(data.result);
+        throw new Error(
+          serverData?.error ||
+            `Simulation failed (${response.status}).`
+        );
+      }
+
+      const simulationData =
+        data as {
+          success?: boolean;
+          world?: unknown;
+          result?: unknown;
+        };
+
+      if (
+        !isValidWorld(
+          simulationData.world
+        )
+      ) {
+        throw new Error(
+          "The simulation returned an invalid world state."
+        );
+      }
+
+      if (
+        !isValidResult(
+          simulationData.result
+        )
+      ) {
+        throw new Error(
+          "The simulation returned an invalid result."
+        );
+      }
+
+      setWorld(
+        simulationData.world
+      );
+
+      setResult(
+        simulationData.result
+      );
 
       setIntervention("");
     } catch (err) {
+      console.error(
+        "Simulation request failed:",
+        err
+      );
+
       setError(
         err instanceof Error
           ? err.message
-          : "Simulation failed."
+          : "Simulation failed. Please try again."
       );
     } finally {
       setLoading(false);
     }
   }
 
+  async function simulate() {
+    await runSimulation(
+      intervention.trim()
+    );
+  }
+
+  async function simulateWithoutIntervention() {
+    await runSimulation("");
+  }
+
   function reset() {
+    if (loading) {
+      return;
+    }
+
     setWorld(initialWorld);
-
     setResult(null);
-
     setIntervention("");
-
     setError("");
   }
 
@@ -279,10 +391,10 @@ export default function Home() {
           </h1>
 
           <p className="subtitle">
-            Create a world, give its characters goals,
-            fears and secrets, then watch them make
-            decisions you did not explicitly tell them
-            to make.
+            Create a world, give its characters
+            goals, fears and secrets, then watch
+            them make decisions you did not
+            explicitly tell them to make.
           </p>
         </header>
 
@@ -292,12 +404,15 @@ export default function Home() {
           <div className="world-meta">
 
             <div>
-              <span>DAY</span>
+              <span>
+                DAY
+              </span>
 
               <strong>
                 {world.day}
               </strong>
             </div>
+
 
             <div className="location">
 
@@ -350,25 +465,35 @@ export default function Home() {
 
           <div className="timeline">
 
-            {world.events.map(
-              (event, index) => (
+            {world.events.length === 0 ? (
 
-                <article
-                  className="event"
-                  key={`${event}-${index}`}
-                >
+              <p>
+                No events have occurred yet.
+              </p>
 
-                  <span className="event-number">
-                    {index + 1}
-                  </span>
+            ) : (
 
-                  <p>
-                    {event}
-                  </p>
+              world.events.map(
+                (event, index) => (
 
-                </article>
+                  <article
+                    className="event"
+                    key={`${event}-${index}`}
+                  >
 
+                    <span className="event-number">
+                      {index + 1}
+                    </span>
+
+                    <p>
+                      {event}
+                    </p>
+
+                  </article>
+
+                )
               )
+
             )}
 
           </div>
@@ -393,16 +518,26 @@ export default function Home() {
 
             <div className="events">
 
-              {result.events.map(
-                (event, index) => (
+              {result.events.length === 0 ? (
 
-                  <p
-                    key={`${event}-${index}`}
-                  >
-                    • {event}
-                  </p>
+                <p>
+                  No new events occurred.
+                </p>
 
+              ) : (
+
+                result.events.map(
+                  (event, index) => (
+
+                    <p
+                      key={`${event}-${index}`}
+                    >
+                      • {event}
+                    </p>
+
+                  )
                 )
+
               )}
 
             </div>
@@ -415,76 +550,96 @@ export default function Home() {
               </span>
 
 
-              {result.character_updates.map(
-                (character) => (
+              {result.character_updates.length === 0 ? (
 
-                  <article
-                    className="character"
-                    key={character.name}
-                  >
+                <p>
+                  No character actions were recorded.
+                </p>
 
-                    <h3>
-                      {character.name}
-                    </h3>
+              ) : (
 
-                    <p>
-                      {character.action}
-                    </p>
+                result.character_updates.map(
+                  (character, index) => (
 
-                    <small>
-                      <strong>
-                        Reason:
-                      </strong>{" "}
-                      {character.reason}
-                    </small>
+                    <article
+                      className="character"
+                      key={`${character.name}-${index}`}
+                    >
 
-                    {character.new_knowledge && (
+                      <h3>
+                        {character.name}
+                      </h3>
 
-                      <small>
-                        <strong>
-                          New knowledge:
-                        </strong>{" "}
-                        {character.new_knowledge}
-                      </small>
 
-                    )}
+                      <p>
+                        {character.action}
+                      </p>
 
-                    {character.relationship_change && (
 
-                      <small>
-                        <strong>
-                          Relationship:
-                        </strong>{" "}
-                        {character.relationship_change}
-                      </small>
+                      {character.reason && (
 
-                    )}
+                        <small>
+                          <strong>
+                            Reason:
+                          </strong>{" "}
+                          {character.reason}
+                        </small>
 
-                    {character.emotional_change && (
+                      )}
 
-                      <small>
-                        <strong>
-                          Emotional state:
-                        </strong>{" "}
-                        {character.emotional_change}
-                      </small>
 
-                    )}
+                      {character.new_knowledge && (
 
-                    {character.new_priority && (
+                        <small>
+                          <strong>
+                            New knowledge:
+                          </strong>{" "}
+                          {character.new_knowledge}
+                        </small>
 
-                      <small>
-                        <strong>
-                          New priority:
-                        </strong>{" "}
-                        {character.new_priority}
-                      </small>
+                      )}
 
-                    )}
 
-                  </article>
+                      {character.relationship_change && (
 
+                        <small>
+                          <strong>
+                            Relationship:
+                          </strong>{" "}
+                          {character.relationship_change}
+                        </small>
+
+                      )}
+
+
+                      {character.emotional_change && (
+
+                        <small>
+                          <strong>
+                            Emotional state:
+                          </strong>{" "}
+                          {character.emotional_change}
+                        </small>
+
+                      )}
+
+
+                      {character.new_priority && (
+
+                        <small>
+                          <strong>
+                            New priority:
+                          </strong>{" "}
+                          {character.new_priority}
+                        </small>
+
+                      )}
+
+                    </article>
+
+                  )
                 )
+
               )}
 
             </div>
@@ -522,6 +677,7 @@ export default function Home() {
                 event.target.value
               )
             }
+            disabled={loading}
             placeholder="Example: Zara secretly follows Daniel after the meeting."
           />
 
@@ -550,14 +706,14 @@ export default function Home() {
 
             <button
               className="secondary"
-              onClick={() => {
-                setIntervention("");
-
-                void simulate();
-              }}
+              onClick={
+                simulateWithoutIntervention
+              }
               disabled={loading}
             >
-              Let them act
+              {loading
+                ? "Simulating…"
+                : "Let them act"}
             </button>
 
           </div>
