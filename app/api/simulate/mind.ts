@@ -1,7 +1,7 @@
-import {
+import type {
   Character,
   WorldState,
-} from "./engine";
+} from "./types";
 
 export type Belief = {
   subject: string;
@@ -29,6 +29,10 @@ export type MindState = {
   motives: Motive[];
 };
 
+/* =========================================================
+   HELPERS
+========================================================= */
+
 function getRelationship(
   character: Character,
   targetId: string
@@ -39,41 +43,64 @@ function getRelationship(
   );
 }
 
-function clamp(value: number) {
+function clamp(
+  value: number
+) {
   return Math.max(
     0,
-    Math.min(100, value)
+    Math.min(
+      100,
+      value
+    )
   );
 }
+
+/* =========================================================
+   BUILD CHARACTER MIND
+========================================================= */
 
 export function buildMindState(
   world: WorldState,
   character: Character
 ): MindState {
+
   const beliefs: Belief[] = [];
+
   const motives: Motive[] = [];
 
-  /*
-   * GOAL
-   */
+
+  /* -------------------------------------------------------
+     CORE GOAL
+  ------------------------------------------------------- */
+
   motives.push({
     type: "GOAL",
-    description: character.goal,
+
+    description:
+      character.goal,
+
     strength: 80,
   });
 
-  /*
-   * FEAR
-   */
+
+  /* -------------------------------------------------------
+     CORE FEAR
+  ------------------------------------------------------- */
+
   motives.push({
     type: "FEAR",
-    description: character.fear,
+
+    description:
+      character.fear,
+
     strength: 70,
   });
 
-  /*
-   * Recent events increase curiosity.
-   */
+
+  /* -------------------------------------------------------
+     CURIOSITY
+  ------------------------------------------------------- */
+
   if (
     character.recentActions.includes(
       "INVESTIGATE"
@@ -82,178 +109,328 @@ export function buildMindState(
       "SEARCH"
     )
   ) {
+
     motives.push({
       type: "CURIOSITY",
+
       description:
         "Understand what is happening before acting.",
+
       strength: 65,
     });
   }
 
-  /*
-   * Character-specific motives.
-   */
-  if (character.id === "zara") {
+
+  /* =======================================================
+     ZARA'S MIND
+  ======================================================= */
+
+  if (
+    character.id ===
+    "zara"
+  ) {
+
     const daniel =
       getRelationship(
         character,
         "daniel"
       );
 
+
     if (daniel) {
-      if (daniel.suspicion >= 60) {
+
+      /* ---------------------------------------------------
+         Suspicion of Daniel
+      --------------------------------------------------- */
+
+      if (
+        daniel.suspicion >=
+        60
+      ) {
+
         beliefs.push({
-          subject: "Daniel",
+          subject:
+            "Daniel",
+
           belief:
             "Daniel may know more about the company than he admits.",
-          confidence: clamp(
-            daniel.suspicion
-          ),
+
+          confidence:
+            clamp(
+              daniel.suspicion
+            ),
         });
 
+
         motives.push({
-          type: "CURIOSITY",
+          type:
+            "CURIOSITY",
+
           description:
             "Find out what Daniel is hiding.",
-          strength: clamp(
-            daniel.suspicion
-          ),
+
+          strength:
+            clamp(
+              daniel.suspicion
+            ),
         });
       }
 
-      if (daniel.trust >= 60) {
+
+      /* ---------------------------------------------------
+         Trust in Daniel
+      --------------------------------------------------- */
+
+      if (
+        daniel.trust >=
+        60
+      ) {
+
         beliefs.push({
-          subject: "Daniel",
+          subject:
+            "Daniel",
+
           belief:
             "Daniel may still be willing to help.",
-          confidence: clamp(
-            daniel.trust
-          ),
+
+          confidence:
+            clamp(
+              daniel.trust
+            ),
         });
       }
     }
 
-    if (world.evidence.length > 0) {
+
+    /* -------------------------------------------------------
+       Evidence changes Zara's mental model
+    ------------------------------------------------------- */
+
+    if (
+      world.evidence.length >
+      0
+    ) {
+
       beliefs.push({
-        subject: "Company",
+        subject:
+          "Company",
+
         belief:
           "The company's student recruitment deserves deeper investigation.",
-        confidence: 80,
+
+        confidence:
+          80,
       });
 
+
       motives.push({
-        type: "GOAL",
+        type:
+          "GOAL",
+
         description:
           "Connect the evidence and discover the company's real objective.",
-        strength: 90,
+
+        strength:
+          90,
       });
     }
   }
 
-  /*
-   * Daniel's internal model.
-   */
-  if (character.id === "daniel") {
+
+  /* =======================================================
+     DANIEL'S MIND
+  ======================================================= */
+
+  if (
+    character.id ===
+    "daniel"
+  ) {
+
     const zara =
       getRelationship(
         character,
         "zara"
       );
 
+
     if (zara) {
-      if (zara.suspicion >= 55) {
+
+      /* ---------------------------------------------------
+         Daniel believes Zara suspects him
+      --------------------------------------------------- */
+
+      if (
+        zara.suspicion >=
+        55
+      ) {
+
         beliefs.push({
-          subject: "Zara",
+          subject:
+            "Zara",
+
           belief:
             "Zara is becoming suspicious of me.",
-          confidence: clamp(
-            zara.suspicion
-          ),
+
+          confidence:
+            clamp(
+              zara.suspicion
+            ),
         });
 
+
         motives.push({
-          type: "SELF_PRESERVATION",
+          type:
+            "SELF_PRESERVATION",
+
           description:
             "Prevent Zara from discovering the agreement with the company.",
-          strength: clamp(
-            zara.suspicion + 20
-          ),
+
+          strength:
+            clamp(
+              zara.suspicion +
+                20
+            ),
         });
       }
 
-      if (zara.trust >= 60) {
+
+      /* ---------------------------------------------------
+         Daniel still believes Zara trusts him
+      --------------------------------------------------- */
+
+      if (
+        zara.trust >=
+        60
+      ) {
+
         beliefs.push({
-          subject: "Zara",
+          subject:
+            "Zara",
+
           belief:
             "Zara still trusts me enough to listen.",
-          confidence: clamp(
-            zara.trust
-          ),
+
+          confidence:
+            clamp(
+              zara.trust
+            ),
         });
       }
     }
 
-    motives.push({
-      type: "PROTECTION",
-      description:
-        "Protect his family from consequences caused by the company.",
-      strength: 95,
-    });
+
+    /* -------------------------------------------------------
+       Protection
+    ------------------------------------------------------- */
 
     motives.push({
-      type: "LOYALTY",
+      type:
+        "PROTECTION",
+
+      description:
+        "Protect his family from consequences caused by the company.",
+
+      strength:
+        95,
+    });
+
+
+    /* -------------------------------------------------------
+       Loyalty
+    ------------------------------------------------------- */
+
+    motives.push({
+      type:
+        "LOYALTY",
+
       description:
         "Avoid completely betraying either Zara or the company.",
-      strength: 75,
+
+      strength:
+        75,
     });
   }
 
-  /*
-   * Knowledge creates grounded beliefs.
-   */
-  for (const knowledge of character.knowledge) {
+
+  /* =======================================================
+     KNOWLEDGE → BELIEFS
+  ======================================================= */
+
+  for (
+    const knowledge
+    of character.knowledge
+  ) {
+
     if (
       knowledge
         .toLowerCase()
-        .includes("company")
+        .includes(
+          "company"
+        )
     ) {
+
       beliefs.push({
-        subject: "Company",
-        belief: knowledge,
-        confidence: 75,
+        subject:
+          "Company",
+
+        belief:
+          knowledge,
+
+        confidence:
+          75,
       });
     }
   }
 
-  /*
-   * Emotional state affects self-preservation.
-   */
+
+  /* =======================================================
+     EMOTIONAL STATE → MOTIVE
+  ======================================================= */
+
   if (
     character.emotionalState
       .toLowerCase()
-      .includes("afraid") ||
+      .includes(
+        "afraid"
+      ) ||
     character.emotionalState
       .toLowerCase()
-      .includes("nervous")
+      .includes(
+        "nervous"
+      )
   ) {
+
     motives.push({
-      type: "SELF_PRESERVATION",
+      type:
+        "SELF_PRESERVATION",
+
       description:
         "Avoid actions that could expose or endanger the character.",
-      strength: 85,
+
+      strength:
+        85,
     });
   }
 
+
   return {
-    characterId: character.id,
+    characterId:
+      character.id,
+
     beliefs,
+
     motives,
   };
 }
 
+/* =========================================================
+   BUILD ALL MIND STATES
+========================================================= */
+
 export function buildAllMindStates(
   world: WorldState
 ): MindState[] {
+
   return world.characters.map(
     (character) =>
       buildMindState(
