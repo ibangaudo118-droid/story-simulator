@@ -31,14 +31,22 @@ type Character = {
   role: string;
   goal: string;
   fear: string;
-  secret: string;
   currentPriority: string;
   emotionalState: string;
-  locationId: string;
+  secret: string;
+  relationship: string;
   knowledge: string[];
   capabilities: string[];
   resources: string[];
-  relationships: Record<string, string>;
+  location: string;
+};
+
+type WorldEntity = {
+  id: string;
+  name: string;
+  type: "person" | "organization" | "location";
+  description: string;
+  location?: string;
 };
 
 type WorldEvent = {
@@ -51,10 +59,20 @@ type WorldEvent = {
 
 type WorldState = {
   day: number;
-  locations: Location[];
+  location: string;
+  situation: string;
   characters: Character[];
-  objects: WorldObject[];
-  events: WorldEvent[];
+  entities: WorldEntity[];
+  events: string[];
+
+  /*
+   * Internal simulation state.
+   * These fields are optional so the existing frontend world
+   * can still be accepted without crashing.
+   */
+  objects?: WorldObject[];
+  locations?: Location[];
+  internalEvents?: WorldEvent[];
 };
 
 type LegalAction = {
@@ -63,12 +81,24 @@ type LegalAction = {
   type: ActionType;
   targetCharacterId?: string;
   targetLocationId?: string;
-  targetObjectId?: string;
 };
 
 type ExecutedAction = LegalAction & {
   description: string;
   knowledgeGained: string[];
+  relationshipChange: string;
+  emotionalChange: string;
+  newPriority: string;
+};
+
+type CharacterUpdate = {
+  name: string;
+  action: string;
+  reason: string;
+  new_knowledge: string;
+  relationship_change: string;
+  emotional_change: string;
+  new_priority: string;
 };
 
 const MODEL = "openai/gpt-oss-120b";
@@ -81,73 +111,52 @@ function clone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value));
 }
 
-function findCharacter(world: WorldState, id: string) {
-  return world.characters.find((c) => c.id === id);
-}
-
-function findLocation(world: WorldState, id: string) {
-  return world.locations.find((l) => l.id === id);
-}
-
-function findObject(world: WorldState, id: string) {
-  return world.objects.find((o) => o.id === id);
-}
-
-function nearbyCharacters(world: WorldState, actor: Character) {
-  return world.characters.filter(
-    (c) => c.id !== actor.id && c.locationId === actor.locationId
-  );
-}
-
-/**
- * IMPORTANT:
- * The world below is the source of truth.
- *
- * The AI is NOT allowed to add anything to it.
- */
-function createInitialWorld(): WorldState {
+function initialWorld(): WorldState {
   return {
     day: 1,
 
-    locations: [
-      {
-        id: "unilag_campus",
-        name: "University of Lagos campus",
-      },
-      {
-        id: "campus_cafe",
-        name: "Campus Café",
-      },
-      {
-        id: "company_office",
-        name: "Company Liaison Office",
-      },
-    ],
+    location: "University of Lagos",
+
+    situation:
+      "A mysterious technology company has started secretly recruiting students on campus.",
 
     characters: [
       {
         id: "zara",
         name: "Zara",
         role: "Student investigator",
-        goal: "Discover what the mysterious technology company is doing on campus.",
-        fear: "The company will harm innocent students or discover her investigation.",
-        secret: "She has already collected evidence against the company.",
-        currentPriority: "Find concrete evidence.",
-        emotionalState: "Suspicious but determined.",
-        locationId: "unilag_campus",
+
+        personality:
+          "Ambitious, observant, suspicious and brave.",
+
+        goal:
+          "Discover what the mysterious company is really doing.",
+
+        fear:
+          "The company will hurt innocent students and discover her investigation.",
+
+        currentPriority:
+          "Find concrete evidence against the company.",
+
+        emotionalState:
+          "Suspicious but determined.",
+
+        secret:
+          "She has already collected evidence against the company.",
+
+        relationship:
+          "She trusts Daniel deeply.",
 
         knowledge: [
           "The company has been approaching students privately.",
-          "Some students who were recruited have stopped talking openly about the company.",
+          "Some recruited students have suddenly stopped talking to their friends.",
         ],
 
         capabilities: [
-          "observe",
-          "investigate",
-          "follow",
-          "search",
-          "confront",
-          "talk",
+          "Good at observing people",
+          "Good at investigating situations",
+          "Comfortable using a smartphone",
+          "Knows several students on campus",
         ],
 
         resources: [
@@ -157,36 +166,45 @@ function createInitialWorld(): WorldState {
           "student contacts",
         ],
 
-        relationships: {
-          daniel:
-            "She trusts Daniel deeply, but she does not know that he is hiding something.",
-        },
+        location: "University of Lagos campus",
       },
 
       {
         id: "daniel",
         name: "Daniel",
         role: "Student and company contact",
-        goal: "Secure his financial future while protecting Zara.",
-        fear: "The company will harm his family if he disobeys.",
+
+        personality:
+          "Charming, ambitious, intelligent and conflicted.",
+
+        goal:
+          "Become financially successful while protecting Zara.",
+
+        fear:
+          "The company will harm his family if he disobeys.",
+
+        currentPriority:
+          "Protect his family without betraying Zara.",
+
+        emotionalState:
+          "Conflicted and afraid.",
+
         secret:
-          "The company offered him ₦5m to identify students investigating it.",
-        currentPriority: "Protect his family without betraying Zara.",
-        emotionalState: "Conflicted and afraid.",
-        locationId: "unilag_campus",
+          "The company has offered him ₦5 million to identify students investigating it.",
+
+        relationship:
+          "He cares deeply about Zara but is hiding something from her.",
 
         knowledge: [
           "The company knows Zara is investigating.",
-          "The company wants him to identify suspicious students.",
+          "The company wants Daniel to identify other suspicious students.",
         ],
 
         capabilities: [
-          "persuasion",
-          "observe",
-          "talk",
-          "contact",
-          "lie",
-          "move",
+          "Good at persuasion",
+          "Good at hiding his emotions",
+          "Knows several students",
+          "Can communicate with the company",
         ],
 
         resources: [
@@ -196,17 +214,69 @@ function createInitialWorld(): WorldState {
           "student contacts",
         ],
 
-        relationships: {
-          zara: "He cares deeply about Zara but is hiding the company's offer.",
-        },
+        location: "University of Lagos campus",
       },
+    ],
+
+    entities: [
+      {
+        id: "company",
+        name: "Mysterious Technology Company",
+        type: "organization",
+        description:
+          "A private technology company secretly recruiting students on campus.",
+      },
+
+      {
+        id: "unilag",
+        name: "University of Lagos",
+        type: "location",
+        description:
+          "The university campus where the simulation takes place.",
+      },
+
+      {
+        id: "campus-cafe",
+        name: "Campus Café",
+        type: "location",
+        description:
+          "A public café where students regularly meet.",
+      },
+
+      {
+        id: "company-office",
+        name: "Company Liaison Office",
+        type: "location",
+        description:
+          "A discreet office used by the company's campus representative.",
+        location: "University of Lagos campus",
+      },
+    ],
+
+    events: [
+      "Zara notices Daniel leaving a private meeting with the mysterious company.",
     ],
 
     objects: [],
 
-    events: [
+    locations: [
       {
-        id: "event_day1_meeting",
+        id: "unilag",
+        name: "University of Lagos campus",
+      },
+      {
+        id: "campus-cafe",
+        name: "Campus Café",
+      },
+      {
+        id: "company-office",
+        name: "Company Liaison Office",
+      },
+    ],
+
+    internalEvents: [
+      {
+        id: "day1_initial",
         day: 1,
         actorId: "zara",
         type: "SYSTEM",
@@ -217,9 +287,114 @@ function createInitialWorld(): WorldState {
   };
 }
 
-/**
- * Generates ONLY actions that are physically/logically available.
- * The LLM never generates the action list.
+function normalizeWorld(input: unknown): WorldState {
+  if (!input || typeof input !== "object") {
+    return initialWorld();
+  }
+
+  const incoming = input as Partial<WorldState>;
+
+  if (
+    !Array.isArray(incoming.characters) ||
+    !Array.isArray(incoming.entities)
+  ) {
+    return initialWorld();
+  }
+
+  const base = initialWorld();
+
+  return {
+    day:
+      typeof incoming.day === "number"
+        ? incoming.day
+        : 1,
+
+    location:
+      typeof incoming.location === "string"
+        ? incoming.location
+        : base.location,
+
+    situation:
+      typeof incoming.situation === "string"
+        ? incoming.situation
+        : base.situation,
+
+    characters: clone(incoming.characters),
+
+    entities: clone(incoming.entities),
+
+    events: Array.isArray(incoming.events)
+      ? clone(incoming.events)
+      : [],
+
+    objects: Array.isArray(incoming.objects)
+      ? clone(incoming.objects)
+      : [],
+
+    locations: Array.isArray(incoming.locations)
+      ? clone(incoming.locations)
+      : clone(base.locations),
+
+    internalEvents: Array.isArray(incoming.internalEvents)
+      ? clone(incoming.internalEvents)
+      : [],
+  };
+}
+
+function locationIdForName(
+  world: WorldState,
+  name: string
+): string | undefined {
+  return world.locations?.find(
+    (location) => location.name === name
+  )?.id;
+}
+
+function locationName(
+  world: WorldState,
+  id: string
+): string {
+  return (
+    world.locations?.find(
+      (location) => location.id === id
+    )?.name ?? id
+  );
+}
+
+function findCharacter(
+  world: WorldState,
+  id: string
+): Character | undefined {
+  return world.characters.find(
+    (character) => character.id === id
+  );
+}
+
+function findCharacterByName(
+  world: WorldState,
+  name: string
+): Character | undefined {
+  return world.characters.find(
+    (character) =>
+      character.name.toLowerCase() === name.toLowerCase()
+  );
+}
+
+function nearbyCharacters(
+  world: WorldState,
+  actor: Character
+): Character[] {
+  return world.characters.filter(
+    (character) =>
+      character.id !== actor.id &&
+      character.location === actor.location
+  );
+}
+
+/*
+ * CODE creates the legal action list.
+ *
+ * The LLM never creates actions.
  */
 function generateLegalActions(
   world: WorldState,
@@ -227,40 +402,52 @@ function generateLegalActions(
 ): LegalAction[] {
   const actions: LegalAction[] = [];
 
-  const nearby = nearbyCharacters(world, actor);
-
   actions.push({
-    id: `${actor.id}_wait`,
+    id: `${actor.id}:WAIT`,
     actorId: actor.id,
     type: "WAIT",
   });
 
   actions.push({
-    id: `${actor.id}_observe`,
+    id: `${actor.id}:OBSERVE`,
     actorId: actor.id,
     type: "OBSERVE",
   });
 
-  for (const character of nearby) {
+  const nearby = nearbyCharacters(world, actor);
+
+  for (const target of nearby) {
     actions.push({
-      id: `${actor.id}_talk_${character.id}`,
+      id: `${actor.id}:TALK:${target.id}`,
       actorId: actor.id,
       type: "TALK",
-      targetCharacterId: character.id,
+      targetCharacterId: target.id,
     });
 
     actions.push({
-      id: `${actor.id}_confront_${character.id}`,
+      id: `${actor.id}:CONFRONT:${target.id}`,
       actorId: actor.id,
       type: "CONFRONT",
-      targetCharacterId: character.id,
+      targetCharacterId: target.id,
+    });
+
+    actions.push({
+      id: `${actor.id}:FOLLOW:${target.id}`,
+      actorId: actor.id,
+      type: "FOLLOW",
+      targetCharacterId: target.id,
     });
   }
 
-  for (const location of world.locations) {
-    if (location.id !== actor.locationId) {
+  /*
+   * Only allow movement to locations that actually exist.
+   */
+  for (const location of world.locations ?? []) {
+    if (
+      location.name !== actor.location
+    ) {
       actions.push({
-        id: `${actor.id}_move_${location.id}`,
+        id: `${actor.id}:MOVE:${location.id}`,
         actorId: actor.id,
         type: "MOVE",
         targetLocationId: location.id,
@@ -268,203 +455,246 @@ function generateLegalActions(
     }
   }
 
-  for (const character of nearby) {
+  actions.push({
+    id: `${actor.id}:SEARCH`,
+    actorId: actor.id,
+    type: "SEARCH",
+  });
+
+  if (
+    actor.capabilities.some(
+      (capability) =>
+        capability.toLowerCase().includes("investigat")
+    )
+  ) {
     actions.push({
-      id: `${actor.id}_follow_${character.id}`,
+      id: `${actor.id}:INVESTIGATE`,
       actorId: actor.id,
-      type: "FOLLOW",
-      targetCharacterId: character.id,
+      type: "INVESTIGATE",
     });
   }
 
-  actions.push({
-    id: `${actor.id}_search_${actor.locationId}`,
-    actorId: actor.id,
-    type: "SEARCH",
-    targetLocationId: actor.locationId,
-  });
-
-  for (const character of world.characters) {
-    if (character.id !== actor.id && actor.capabilities.includes("contact")) {
-      actions.push({
-        id: `${actor.id}_contact_${character.id}`,
-        actorId: actor.id,
-        type: "CONTACT",
-        targetCharacterId: character.id,
-      });
-    }
-  }
-
-  if (actor.capabilities.includes("investigate")) {
-    for (const location of world.locations) {
-      actions.push({
-        id: `${actor.id}_investigate_${location.id}`,
-        actorId: actor.id,
-        type: "INVESTIGATE",
-        targetLocationId: location.id,
-      });
-    }
+  /*
+   * Contact is allowed only for Daniel because his
+   * existing world state says he can communicate
+   * with the company.
+   *
+   * We still don't create a new entity.
+   */
+  if (
+    actor.id === "daniel" &&
+    world.entities.some(
+      (entity) => entity.id === "company"
+    )
+  ) {
+    actions.push({
+      id: `${actor.id}:CONTACT_COMPANY`,
+      actorId: actor.id,
+      type: "CONTACT",
+    });
   }
 
   return actions;
 }
 
-/**
- * Removes impossible actions and duplicates.
- */
-function validateActions(
+function validateAction(
   world: WorldState,
-  actions: LegalAction[],
-  actor: Character
-): LegalAction[] {
-  const valid: LegalAction[] = [];
+  action: LegalAction
+): boolean {
+  const actor = findCharacter(
+    world,
+    action.actorId
+  );
 
-  for (const action of actions) {
-    if (action.actorId !== actor.id) continue;
+  if (!actor) return false;
 
-    if (action.targetCharacterId) {
-      if (!findCharacter(world, action.targetCharacterId)) continue;
-    }
-
-    if (action.targetLocationId) {
-      if (!findLocation(world, action.targetLocationId)) continue;
-    }
-
-    if (action.targetObjectId) {
-      if (!findObject(world, action.targetObjectId)) continue;
-    }
-
-    if (
-      ["TALK", "CONFRONT", "FOLLOW"].includes(action.type) &&
+  if (action.targetCharacterId) {
+    const target = findCharacter(
+      world,
       action.targetCharacterId
-    ) {
-      const target = findCharacter(world, action.targetCharacterId);
+    );
 
-      if (!target) continue;
-
-      if (
-        action.type !== "FOLLOW" &&
-        target.locationId !== actor.locationId
-      ) {
-        continue;
-      }
-    }
-
-    if (action.type === "MOVE") {
-      if (!action.targetLocationId) continue;
-
-      if (action.targetLocationId === actor.locationId) {
-        continue;
-      }
-    }
-
-    if (action.type === "SEARCH") {
-      if (action.targetLocationId !== actor.locationId) {
-        continue;
-      }
-    }
-
-    valid.push(action);
+    if (!target) return false;
   }
 
-  const seen = new Set<string>();
+  if (action.targetLocationId) {
+    const locationExists =
+      world.locations?.some(
+        (location) =>
+          location.id === action.targetLocationId
+      );
 
-  return valid.filter((action) => {
-    if (seen.has(action.id)) return false;
+    if (!locationExists) return false;
+  }
 
-    seen.add(action.id);
-    return true;
-  });
+  if (
+    action.type === "TALK" ||
+    action.type === "CONFRONT"
+  ) {
+    if (!action.targetCharacterId) return false;
+
+    const target = findCharacter(
+      world,
+      action.targetCharacterId
+    );
+
+    if (!target) return false;
+
+    if (target.location !== actor.location) {
+      return false;
+    }
+  }
+
+  if (action.type === "FOLLOW") {
+    if (!action.targetCharacterId) return false;
+
+    const target = findCharacter(
+      world,
+      action.targetCharacterId
+    );
+
+    if (!target) return false;
+  }
+
+  if (action.type === "MOVE") {
+    if (!action.targetLocationId) return false;
+
+    const targetLocation =
+      world.locations?.find(
+        (location) =>
+          location.id === action.targetLocationId
+      );
+
+    if (!targetLocation) return false;
+
+    if (targetLocation.name === actor.location) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
-/**
- * The LLM is ONLY allowed to select one action
- * from the already-generated legal list.
- */
 async function chooseAction(
   world: WorldState,
   actor: Character,
   legalActions: LegalAction[]
 ): Promise<LegalAction> {
+  if (legalActions.length === 0) {
+    throw new Error("No legal actions.");
+  }
+
   const apiKey = getGroqKey();
 
-  if (!apiKey || legalActions.length === 0) {
+  /*
+   * If Groq isn't configured, deterministic fallback.
+   */
+  if (!apiKey) {
     return legalActions[0];
   }
 
-  const actionDescriptions = legalActions.map((action) => {
-    const targetCharacter = action.targetCharacterId
-      ? findCharacter(world, action.targetCharacterId)?.name
-      : undefined;
-
-    const targetLocation = action.targetLocationId
-      ? findLocation(world, action.targetLocationId)?.name
-      : undefined;
-
-    return {
+  const simplifiedActions = legalActions.map(
+    (action) => ({
       id: action.id,
       type: action.type,
-      targetCharacter,
-      targetLocation,
-    };
-  });
+      targetCharacter:
+        action.targetCharacterId
+          ? findCharacter(
+              world,
+              action.targetCharacterId
+            )?.name
+          : null,
+      targetLocation:
+        action.targetLocationId
+          ? locationName(
+              world,
+              action.targetLocationId
+            )
+          : null,
+    })
+  );
 
   const prompt = `
-You are the decision-making component of a persistent world simulation.
+You are a decision engine inside a persistent world simulation.
 
 You are NOT a storyteller.
 
-You MUST NOT invent:
+You cannot create anything.
+
+You cannot invent:
 - people
 - objects
 - locations
 - organizations
-- events
 - evidence
 - messages
+- events
 - discoveries
 - consequences
 
-You may ONLY choose ONE action from the supplied legal action list.
+You can ONLY select one action from LEGAL_ACTIONS.
 
-Character:
-${JSON.stringify(actor, null, 2)}
-
-Current world:
+CHARACTER:
 ${JSON.stringify(
   {
-    day: world.day,
-    locations: world.locations,
-    characters: world.characters.map((c) => ({
-      id: c.id,
-      name: c.name,
-      locationId: c.locationId,
-      goal: c.goal,
-      fear: c.fear,
-      currentPriority: c.currentPriority,
-      emotionalState: c.emotionalState,
-      knowledge: c.knowledge,
-      relationships: c.relationships,
-    })),
-    objects: world.objects,
+    id: actor.id,
+    name: actor.name,
+    role: actor.role,
+    goal: actor.goal,
+    fear: actor.fear,
+    currentPriority: actor.currentPriority,
+    emotionalState: actor.emotionalState,
+    secret: actor.secret,
+    relationship: actor.relationship,
+    knowledge: actor.knowledge,
+    location: actor.location,
   },
   null,
   2
 )}
 
-LEGAL ACTIONS:
-${JSON.stringify(actionDescriptions, null, 2)}
+WORLD:
+${JSON.stringify(
+  {
+    day: world.day,
+    locations: world.locations,
+    characters: world.characters.map(
+      (character) => ({
+        id: character.id,
+        name: character.name,
+        location: character.location,
+        goal: character.goal,
+        fear: character.fear,
+        currentPriority:
+          character.currentPriority,
+        emotionalState:
+          character.emotionalState,
+        knowledge: character.knowledge,
+        relationship:
+          character.relationship,
+      })
+    ),
+    entities: world.entities,
+    objects: world.objects ?? [],
+  },
+  null,
+  2
+)}
 
-Choose exactly ONE action.
+LEGAL_ACTIONS:
+${JSON.stringify(
+  simplifiedActions,
+  null,
+  2
+)}
 
-Return ONLY valid JSON:
+Choose exactly ONE.
+
+Return ONLY:
 
 {
-  "actionId": "exact-id-from-the-list"
+  "actionId": "exact-action-id"
 }
-
-Do not return explanations.
-Do not create another action.
 `;
 
   try {
@@ -472,24 +702,28 @@ Do not create another action.
       "https://api.groq.com/openai/v1/chat/completions",
       {
         method: "POST",
+
         headers: {
           Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
+
         body: JSON.stringify({
           model: MODEL,
-          temperature: 0.2,
+          temperature: 0.1,
+
           messages: [
             {
               role: "system",
               content:
-                "You are a constrained simulation decision engine. Never invent actions.",
+                "You select actions. You never create or describe new world facts.",
             },
             {
               role: "user",
               content: prompt,
             },
           ],
+
           response_format: {
             type: "json_object",
           },
@@ -498,315 +732,435 @@ Do not create another action.
     );
 
     if (!response.ok) {
-      throw new Error(`Groq returned ${response.status}`);
+      throw new Error(
+        `Groq returned HTTP ${response.status}`
+      );
     }
 
     const data = await response.json();
 
-    const raw = data?.choices?.[0]?.message?.content;
+    const content =
+      data?.choices?.[0]?.message?.content;
 
-    if (!raw) {
-      throw new Error("No decision returned");
+    if (!content) {
+      throw new Error(
+        "The decision model returned no content."
+      );
     }
 
-    const parsed = JSON.parse(raw);
+    const parsed = JSON.parse(content);
 
     const selected = legalActions.find(
-      (action) => action.id === parsed.actionId
+      (action) =>
+        action.id === parsed.actionId
     );
 
-    if (selected) {
+    if (
+      selected &&
+      validateAction(world, selected)
+    ) {
       return selected;
     }
   } catch (error) {
-    console.error("Decision engine error:", error);
+    console.error(
+      "Decision engine error:",
+      error
+    );
   }
 
-  // Deterministic fallback.
+  /*
+   * Safe deterministic fallback.
+   */
   return legalActions[0];
 }
 
-/**
- * THIS is the actual simulation.
+/*
+ * This is where reality changes.
  *
- * No LLM is called here.
- * No new world entities can be created here.
+ * There is NO LLM here.
  */
 function executeAction(
   world: WorldState,
   action: LegalAction
 ): ExecutedAction {
-  const actor = findCharacter(world, action.actorId);
+  const actor = findCharacter(
+    world,
+    action.actorId
+  );
 
   if (!actor) {
-    throw new Error("Actor does not exist.");
+    throw new Error(
+      "Cannot execute action: actor does not exist."
+    );
   }
 
-  const knowledgeGained: string[] = [];
   let description = "";
+  let knowledgeGained: string[] = [];
+  let relationshipChange = "";
+  let emotionalChange =
+    actor.emotionalState;
+  let newPriority =
+    actor.currentPriority;
 
   switch (action.type) {
     case "WAIT": {
-      description = `${actor.name} waits and observes what happens around them.`;
+      description =
+        `${actor.name} waits and continues observing the situation.`;
+
       break;
     }
 
     case "OBSERVE": {
-      const nearby = nearbyCharacters(world, actor);
+      const nearby =
+        nearbyCharacters(
+          world,
+          actor
+        );
 
       if (nearby.length > 0) {
-        description = `${actor.name} observes the people nearby.`;
+        description =
+          `${actor.name} observes the people nearby.`;
       } else {
-        description = `${actor.name} observes the surroundings.`;
+        description =
+          `${actor.name} observes the surroundings.`;
       }
 
       break;
     }
 
     case "MOVE": {
-      const destination = action.targetLocationId
-        ? findLocation(world, action.targetLocationId)
-        : undefined;
+      const destination =
+        world.locations?.find(
+          (location) =>
+            location.id ===
+            action.targetLocationId
+        );
 
       if (!destination) {
-        throw new Error("Invalid destination.");
+        throw new Error(
+          "Destination does not exist."
+        );
       }
 
-      actor.locationId = destination.id;
+      actor.location =
+        destination.name;
 
-      description = `${actor.name} moves to ${destination.name}.`;
+      description =
+        `${actor.name} moves to ${destination.name}.`;
 
       break;
     }
 
     case "FOLLOW": {
-      const target = action.targetCharacterId
-        ? findCharacter(world, action.targetCharacterId)
-        : undefined;
+      const target =
+        action.targetCharacterId
+          ? findCharacter(
+              world,
+              action.targetCharacterId
+            )
+          : undefined;
 
       if (!target) {
-        throw new Error("Follow target does not exist.");
+        throw new Error(
+          "Follow target does not exist."
+        );
       }
 
-      actor.locationId = target.locationId;
+      actor.location =
+        target.location;
 
-      description = `${actor.name} follows ${target.name}.`;
+      description =
+        `${actor.name} follows ${target.name}.`;
 
       break;
     }
 
     case "TALK": {
-      const target = action.targetCharacterId
-        ? findCharacter(world, action.targetCharacterId)
-        : undefined;
+      const target =
+        action.targetCharacterId
+          ? findCharacter(
+              world,
+              action.targetCharacterId
+            )
+          : undefined;
 
       if (!target) {
-        throw new Error("Talk target does not exist.");
+        throw new Error(
+          "Talk target does not exist."
+        );
       }
 
-      if (target.locationId !== actor.locationId) {
-        throw new Error("Characters are not in the same location.");
+      if (
+        target.location !==
+        actor.location
+      ) {
+        throw new Error(
+          "Characters are not together."
+        );
       }
 
-      description = `${actor.name} talks with ${target.name}.`;
+      description =
+        `${actor.name} talks with ${target.name}.`;
 
       break;
     }
 
     case "CONFRONT": {
-      const target = action.targetCharacterId
-        ? findCharacter(world, action.targetCharacterId)
-        : undefined;
+      const target =
+        action.targetCharacterId
+          ? findCharacter(
+              world,
+              action.targetCharacterId
+            )
+          : undefined;
 
       if (!target) {
-        throw new Error("Confront target does not exist.");
+        throw new Error(
+          "Confront target does not exist."
+        );
       }
 
-      if (target.locationId !== actor.locationId) {
-        throw new Error("Characters are not in the same location.");
+      if (
+        target.location !==
+        actor.location
+      ) {
+        throw new Error(
+          "Characters are not together."
+        );
       }
 
-      description = `${actor.name} confronts ${target.name}.`;
+      description =
+        `${actor.name} confronts ${target.name}.`;
+
+      if (actor.id === "zara") {
+        relationshipChange =
+          "Her trust in Daniel becomes more cautious after the confrontation.";
+
+        emotionalChange =
+          "More suspicious and alert.";
+      }
 
       break;
     }
 
     case "SEARCH": {
-      const location = action.targetLocationId
-        ? findLocation(world, action.targetLocationId)
-        : undefined;
-
-      if (!location || location.id !== actor.locationId) {
-        throw new Error("Invalid search location.");
-      }
-
-      const objects = world.objects.filter(
-        (object) =>
-          object.locationId === location.id &&
-          object.visible &&
-          !object.destroyed
-      );
+      const objects =
+        (world.objects ?? []).filter(
+          (object) =>
+            object.locationId ===
+              locationIdForName(
+                world,
+                actor.location
+              ) &&
+            object.visible &&
+            !object.destroyed
+        );
 
       if (objects.length === 0) {
-        description = `${actor.name} searches ${location.name} but finds nothing relevant.`;
+        description =
+          `${actor.name} searches ${actor.location} but finds nothing relevant.`;
       } else {
-        const names = objects.map((object) => object.name);
+        description =
+          `${actor.name} searches ${actor.location} and notices ${objects
+            .map((object) => object.name)
+            .join(", ")}.`;
 
-        description = `${actor.name} searches ${location.name} and notices ${names.join(
-          ", "
-        )}.`;
-
-        for (const object of objects) {
-          knowledgeGained.push(
-            `${object.name} is located at ${location.name}.`
+        knowledgeGained =
+          objects.map(
+            (object) =>
+              `${object.name} is located at ${actor.location}.`
           );
-        }
       }
 
       break;
     }
 
     case "INVESTIGATE": {
-      const location = action.targetLocationId
-        ? findLocation(world, action.targetLocationId)
-        : undefined;
-
-      if (!location) {
-        throw new Error("Investigation target does not exist.");
-      }
-
-      description = `${actor.name} investigates ${location.name}.`;
+      description =
+        `${actor.name} investigates the ${actor.location}.`;
 
       break;
     }
 
     case "CONTACT": {
-      const target = action.targetCharacterId
-        ? findCharacter(world, action.targetCharacterId)
-        : undefined;
-
-      if (!target) {
-        throw new Error("Contact target does not exist.");
+      if (actor.id !== "daniel") {
+        throw new Error(
+          "This character cannot contact the company."
+        );
       }
 
-      description = `${actor.name} contacts ${target.name}.`;
+      description =
+        "Daniel contacts his existing company contact.";
+
+      actor.emotionalState =
+        "More conflicted after communicating with the company.";
+
+      emotionalChange =
+        actor.emotionalState;
 
       break;
     }
 
     default:
-      throw new Error("Unsupported action.");
-  }
-
-  const event: WorldEvent = {
-    id: `day_${world.day}_${actor.id}_${world.events.length}`,
-    day: world.day,
-    actorId: actor.id,
-    type: action.type,
-    description,
-  };
-
-  world.events.push(event);
-
-  for (const knowledge of knowledgeGained) {
-    if (!actor.knowledge.includes(knowledge)) {
-      actor.knowledge.push(knowledge);
-    }
+      throw new Error(
+        "Unsupported action."
+      );
   }
 
   return {
     ...action,
     description,
     knowledgeGained,
+    relationshipChange,
+    emotionalChange,
+    newPriority,
   };
 }
 
-function summarizeAction(
+function addEvent(
   world: WorldState,
-  executed: ExecutedAction
-): string {
-  return executed.description;
-}
-
-function buildSituation(world: WorldState): string {
-  const recentEvents = world.events
-    .filter((event) => event.day === world.day)
-    .slice(-6);
-
-  if (recentEvents.length === 0) {
-    return "The world is quiet. The characters continue pursuing their goals.";
-  }
-
-  return recentEvents.map((event) => event.description).join(" ");
-}
-
-function buildNextTension(world: WorldState): string {
-  const priorities = world.characters
-    .map((character) => `${character.name}: ${character.currentPriority}`)
-    .join(" ");
-
-  return `The characters continue pursuing their own priorities. ${priorities}`;
-}
-
-function buildCharacterUpdate(
-  world: WorldState,
-  actor: Character,
   executed: ExecutedAction
 ) {
+  const eventText =
+    executed.description;
+
+  world.events.push(eventText);
+
+  world.internalEvents =
+    world.internalEvents ?? [];
+
+  world.internalEvents.push({
+    id:
+      `day-${world.day}-${world.internalEvents.length}`,
+    day: world.day,
+    actorId: executed.actorId,
+    type: executed.type,
+    description: eventText,
+  });
+}
+
+function createCharacterUpdate(
+  world: WorldState,
+  executed: ExecutedAction
+): CharacterUpdate {
+  const actor =
+    findCharacter(
+      world,
+      executed.actorId
+    );
+
+  if (!actor) {
+    throw new Error(
+      "Character disappeared from world."
+    );
+  }
+
   return {
     name: actor.name,
-    action: summarizeAction(world, executed),
-    reason: actor.currentPriority,
-    newKnowledge: executed.knowledgeGained,
-    relationship: Object.values(actor.relationships)[0] ?? "",
+
+    action:
+      executed.description,
+
+    reason:
+      actor.currentPriority,
+
+    new_knowledge:
+      executed.knowledgeGained.length > 0
+        ? executed.knowledgeGained.join(" ")
+        : "",
+
+    relationship_change:
+      executed.relationshipChange,
+
+    emotional_change:
+      executed.emotionalChange,
+
+    new_priority:
+      executed.newPriority,
   };
 }
 
-function normalizeIncomingWorld(input: unknown): WorldState {
-  if (!input || typeof input !== "object") {
-    return createInitialWorld();
+function buildSituation(
+  world: WorldState
+): string {
+  const todayEvents =
+    world.internalEvents?.filter(
+      (event) =>
+        event.day === world.day
+    ) ?? [];
+
+  if (todayEvents.length === 0) {
+    return world.situation;
   }
 
-  const candidate = input as Partial<WorldState>;
-
-  if (
-    !Array.isArray(candidate.characters) ||
-    !Array.isArray(candidate.locations)
-  ) {
-    return createInitialWorld();
-  }
-
-  return {
-    day: Number(candidate.day) || 1,
-    locations: candidate.locations,
-    characters: candidate.characters,
-    objects: Array.isArray(candidate.objects) ? candidate.objects : [],
-    events: Array.isArray(candidate.events) ? candidate.events : [],
-  };
+  return todayEvents
+    .map(
+      (event) =>
+        event.description
+    )
+    .join(" ");
 }
 
-export async function POST(request: NextRequest) {
+function buildNextTension(
+  world: WorldState
+): string {
+  return world.characters
+    .map(
+      (character) =>
+        `${character.name} continues to pursue: ${character.currentPriority}`
+    )
+    .join(" ");
+}
+
+export async function POST(
+  request: NextRequest
+) {
   try {
-    const body = await request.json();
+    const body =
+      await request.json();
 
-    const incomingWorld = body?.world;
+    const suppliedWorld =
+      body?.world;
 
-    const world = clone(normalizeIncomingWorld(incomingWorld));
+    const world =
+      clone(
+        normalizeWorld(
+          suppliedWorld
+        )
+      );
 
     /*
-     * If no world was supplied, start from Day 1.
+     * No supplied world means the client
+     * is requesting the initial state.
      */
-    if (!incomingWorld) {
-      const initialWorld = createInitialWorld();
+    if (!suppliedWorld) {
+      const fresh =
+        initialWorld();
 
       return NextResponse.json({
         success: true,
-        world: initialWorld,
-        day: initialWorld.day,
-        situation: buildSituation(initialWorld),
-        timeline: initialWorld.events,
-        character_updates: [],
-        next_tension: buildNextTension(initialWorld),
+
+        world: fresh,
+
+        result: {
+          day: fresh.day,
+
+          situation:
+            fresh.situation,
+
+          events:
+            fresh.events,
+
+          character_updates: [],
+
+          new_situation:
+            fresh.situation,
+
+          next_tension:
+            buildNextTension(
+              fresh
+            ),
+        },
       });
     }
 
@@ -815,88 +1169,146 @@ export async function POST(request: NextRequest) {
      */
     world.day += 1;
 
-    const executedActions: ExecutedAction[] = [];
+    const executedActions:
+      ExecutedAction[] = [];
 
     /*
-     * Each character acts once.
+     * Characters act sequentially.
      *
-     * Their choices are independent.
-     * The second character sees the world after the first
-     * character's action.
+     * The second character sees
+     * the state produced by the first.
      */
-    for (const actor of world.characters) {
-      const legal = validateActions(
-        world,
-        generateLegalActions(world, actor),
-        actor
-      );
+    for (
+      const actor of world.characters
+    ) {
+      const legalActions =
+        generateLegalActions(
+          world,
+          actor
+        ).filter(
+          (action) =>
+            validateAction(
+              world,
+              action
+            )
+        );
 
-      if (legal.length === 0) {
+      if (
+        legalActions.length === 0
+      ) {
         continue;
       }
 
-      const selected = await chooseAction(world, actor, legal);
+      const selected =
+        await chooseAction(
+          world,
+          actor,
+          legalActions
+        );
 
       /*
-       * Revalidate immediately before execution.
+       * Revalidate after the AI decision.
        */
-      const stillLegal = validateActions(
-        world,
-        [selected],
-        actor
-      );
-
-      if (stillLegal.length === 0) {
+      if (
+        !validateAction(
+          world,
+          selected
+        )
+      ) {
         continue;
       }
 
-      const executed = executeAction(world, stillLegal[0]);
+      const executed =
+        executeAction(
+          world,
+          selected
+        );
 
-      executedActions.push(executed);
+      addEvent(
+        world,
+        executed
+      );
+
+      executedActions.push(
+        executed
+      );
     }
 
-    const characterUpdates = executedActions.map((executed) => {
-      const actor = findCharacter(world, executed.actorId);
+    /*
+     * The frontend expects this exact shape.
+     */
+    const characterUpdates =
+      executedActions.map(
+        (executed) =>
+          createCharacterUpdate(
+            world,
+            executed
+          )
+      );
 
-      if (!actor) {
-        return null;
-      }
+    const todayEvents =
+      world.internalEvents?.filter(
+        (event) =>
+          event.day === world.day
+      ) ?? [];
 
-      return buildCharacterUpdate(world, actor, executed);
-    }).filter(Boolean);
+    const events =
+      todayEvents.map(
+        (event) =>
+          event.description
+      );
 
+    const situation =
+      events.length > 0
+        ? events.join(" ")
+        : "The characters continue pursuing their goals.";
+
+    world.situation =
+      situation;
+
+    /*
+     * Return EXACTLY what page.tsx expects.
+     */
     return NextResponse.json({
       success: true,
 
-      day: world.day,
-
       world,
 
-      situation: buildSituation(world),
+      result: {
+        day: world.day,
 
-      timeline: world.events,
+        situation,
 
-      simulation_result:
-        executedActions.length > 0
-          ? executedActions.map((action) => action.description).join(" ")
-          : "No character action was executed.",
+        events,
 
-      character_updates: characterUpdates,
+        character_updates:
+          characterUpdates,
 
-      next_tension: buildNextTension(world),
+        new_situation:
+          situation,
+
+        next_tension:
+          buildNextTension(
+            world
+          ),
+      },
     });
   } catch (error) {
-    console.error("Simulation error:", error);
+    console.error(
+      "Simulation error:",
+      error
+    );
 
     return NextResponse.json(
       {
-        success: false,
         error:
           error instanceof Error
             ? error.message
             : "Simulation failed.",
       },
-      { status: 500 }
+      {
+        status: 500,
+      }
     );
   }
 }
