@@ -106,7 +106,7 @@ Return ONLY valid JSON with this exact shape:
 `;
 
     const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
+      model: "openai/gpt-oss-120b",
       temperature: 0.9,
       response_format: {
         type: "json_object"
