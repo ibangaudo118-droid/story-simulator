@@ -7,6 +7,9 @@ type Character = {
   name: string;
   personality: string;
   goal: string;
+  fear: string;
+  current_priority: string;
+  emotional_state: string;
   secret: string;
   relationship: string;
   knowledge: string[];
@@ -26,6 +29,8 @@ type CharacterUpdate = {
   reason: string;
   new_knowledge: string;
   relationship_change: string;
+  emotional_change: string;
+  new_priority: string;
 };
 
 const groq = new Groq({
@@ -58,44 +63,60 @@ export async function POST(request: Request) {
     }
 
     const prompt = `
-You are the simulation engine for an interactive story.
+You are the decision engine of a persistent interactive world.
 
-You are NOT a normal AI story writer.
+You are NOT writing a normal story.
 
-You are simulating a persistent world where characters have their own
-goals, personalities, secrets, relationships and knowledge.
+You are simulating characters who have their own motivations,
+fears, knowledge, relationships and priorities.
 
-WORLD STATE:
+WORLD:
 ${JSON.stringify(world, null, 2)}
 
 USER INTERVENTION:
 ${
   intervention ||
-  "No direct intervention. Let the characters act autonomously."
+  "No intervention. Let every character decide what they would realistically do."
 }
 
-IMPORTANT RULES:
+CHARACTER DECISION RULES:
 
-1. Characters are autonomous.
-2. Characters should make decisions based on their own goals,
-   personalities, secrets and current knowledge.
-3. A character cannot know something unless they already knew it
-   or discovered it during the simulation.
-4. Previous events MUST affect future decisions.
-5. Relationships can change gradually.
-6. Characters can lie, cooperate, betray each other, investigate,
-   make mistakes and change their minds.
-7. Characters should not all agree.
-8. The user can influence events but does not completely control
-   the characters.
-9. Advance the world by approximately one day.
-10. Preserve continuity.
-11. Do not randomly reset or rewrite established facts.
-12. New information should have consequences later.
-13. Create believable tension that can continue into the next day.
-14. Keep the number of major events between 2 and 5.
-15. Do not reveal a character's secret to another character unless
-    there is a believable way that character discovered it.
+1. Every character is autonomous.
+2. Characters must make decisions based on their own goals,
+   fears, personality, knowledge, relationships and current priority.
+3. Do not make characters act simply because it creates a dramatic story.
+4. Characters can make mistakes.
+5. Characters can misunderstand situations.
+6. Characters can lie.
+7. Characters can hide information.
+8. Characters can change their plans.
+9. Characters can disagree with each other.
+10. Characters can pursue different objectives simultaneously.
+11. A character cannot know information they have not discovered.
+12. Secrets remain secret unless there is a believable way they are exposed.
+13. Previous events must influence future decisions.
+14. Emotional states should change gradually based on events.
+15. Current priorities can change when circumstances change.
+16. The user can influence the world but does not directly control every character.
+17. Do not force the user intervention to succeed automatically.
+18. Advance the world approximately one day.
+19. Generate 2-4 meaningful events.
+20. Prefer believable consequences over dramatic ones.
+21. Avoid repeating the exact same action from the previous day unless
+    the character has a strong reason to repeat it.
+
+IMPORTANT:
+
+Before deciding what each character does, reason internally about:
+
+- What does this character want?
+- What are they afraid of?
+- What do they currently know?
+- What do they believe about the other characters?
+- What is their current priority?
+- What would a person with this personality realistically do?
+
+Do not output this internal reasoning.
 
 Return ONLY valid JSON.
 
@@ -112,20 +133,22 @@ Use exactly this structure:
   "character_updates": [
     {
       "name": "character name",
-      "action": "what the character did",
-      "reason": "why they did it",
-      "new_knowledge": "new information this character learned, or empty string",
-      "relationship_change": "how this character's relationship changed, or empty string"
+      "action": "what the character decided to do",
+      "reason": "short explanation of the motivation",
+      "new_knowledge": "new information learned, or empty string",
+      "relationship_change": "relationship change, or empty string",
+      "emotional_change": "change in emotional state, or empty string",
+      "new_priority": "new current priority, or empty string"
     }
   ],
-  "new_situation": "the situation the world is now in",
-  "next_tension": "the unresolved conflict that could drive the next day"
+  "new_situation": "the resulting situation",
+  "next_tension": "the unresolved tension that could drive the next simulation"
 }
 `;
 
     const completion = await groq.chat.completions.create({
       model: "openai/gpt-oss-120b",
-      temperature: 0.9,
+      temperature: 0.85,
       response_format: {
         type: "json_object"
       },
@@ -133,7 +156,7 @@ Use exactly this structure:
         {
           role: "system",
           content:
-            "You are a persistent-world simulation engine. Return only valid JSON."
+            "You are an autonomous character decision engine. Return only valid JSON."
         },
         {
           role: "user",
@@ -177,18 +200,30 @@ Use exactly this structure:
 
       return {
         ...character,
+
         knowledge: updatedKnowledge,
+
         relationship:
-          update.relationship_change || character.relationship
+          update.relationship_change || character.relationship,
+
+        emotional_state:
+          update.emotional_change || character.emotional_state,
+
+        current_priority:
+          update.new_priority || character.current_priority
       };
     });
 
     const updatedWorld: WorldState = {
       ...world,
+
       day: Number(result.day) || world.day + 1,
+
       situation:
         result.new_situation || world.situation,
+
       characters: updatedCharacters,
+
       events: [
         ...world.events,
         ...(Array.isArray(result.events)
