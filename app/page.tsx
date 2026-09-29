@@ -22,7 +22,9 @@ type SimulationResult = {
 };
 
 type Character = {
+  id: string;
   name: string;
+  role: string;
   personality: string;
   goal: string;
   fear: string;
@@ -33,6 +35,15 @@ type Character = {
   knowledge: string[];
   capabilities: string[];
   resources: string[];
+  location: string;
+};
+
+type WorldEntity = {
+  id: string;
+  name: string;
+  type: "person" | "organization" | "location";
+  description: string;
+  location?: string;
 };
 
 type WorldState = {
@@ -40,6 +51,7 @@ type WorldState = {
   location: string;
   situation: string;
   characters: Character[];
+  entities: WorldEntity[];
   events: string[];
 };
 
@@ -53,7 +65,9 @@ const initialWorld: WorldState = {
 
   characters: [
     {
+      id: "zara",
       name: "Zara",
+      role: "Student investigator",
 
       personality:
         "Ambitious, observant, suspicious and brave.",
@@ -93,11 +107,15 @@ const initialWorld: WorldState = {
         "student ID",
         "personal laptop",
         "student contacts"
-      ]
+      ],
+
+      location: "University of Lagos campus"
     },
 
     {
+      id: "daniel",
       name: "Daniel",
+      role: "Student and company contact",
 
       personality:
         "Charming, ambitious, intelligent and conflicted.",
@@ -137,7 +155,44 @@ const initialWorld: WorldState = {
         "student ID",
         "company contact",
         "student contacts"
-      ]
+      ],
+
+      location: "University of Lagos campus"
+    }
+  ],
+
+  entities: [
+    {
+      id: "company",
+      name: "Mysterious Technology Company",
+      type: "organization",
+      description:
+        "A private technology company secretly recruiting students on campus."
+    },
+
+    {
+      id: "unilag",
+      name: "University of Lagos",
+      type: "location",
+      description:
+        "The university campus where the simulation takes place."
+    },
+
+    {
+      id: "campus-cafe",
+      name: "Campus Café",
+      type: "location",
+      description:
+        "A public café where students regularly meet."
+    },
+
+    {
+      id: "company-office",
+      name: "Company Liaison Office",
+      type: "location",
+      description:
+        "A discreet office used by the company's campus representative.",
+      location: "University of Lagos campus"
     }
   ],
 
@@ -243,7 +298,6 @@ export default function Home() {
                 {world.day}
               </strong>
             </div>
-
 
             <div className="location">
 
@@ -373,11 +427,9 @@ export default function Home() {
                       {character.name}
                     </h3>
 
-
                     <p>
                       {character.action}
                     </p>
-
 
                     <small>
                       <strong>
@@ -385,7 +437,6 @@ export default function Home() {
                       </strong>{" "}
                       {character.reason}
                     </small>
-
 
                     {character.new_knowledge && (
 
@@ -398,7 +449,6 @@ export default function Home() {
 
                     )}
 
-
                     {character.relationship_change && (
 
                       <small>
@@ -410,7 +460,6 @@ export default function Home() {
 
                     )}
 
-
                     {character.emotional_change && (
 
                       <small>
@@ -421,7 +470,6 @@ export default function Home() {
                       </small>
 
                     )}
-
 
                     {character.new_priority && (
 
@@ -519,4 +567,4 @@ export default function Home() {
       </div>
     </main>
   );
-  }
+}
