@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse } from "next";
 import Groq from "groq-sdk";
 
 export const runtime = "nodejs";
@@ -18,6 +18,14 @@ type WorldState = {
   situation: string;
   characters: Character[];
   events: string[];
+};
+
+type CharacterUpdate = {
+  name: string;
+  action: string;
+  reason: string;
+  new_knowledge: string;
+  relationship_change: string;
 };
 
 const groq = new Groq({
@@ -52,40 +60,50 @@ export async function POST(request: Request) {
     const prompt = `
 You are the simulation engine for an interactive story.
 
-Your job is NOT to write a normal story.
+You are NOT a normal AI story writer.
 
-You simulate autonomous characters inside a persistent world.
+You are simulating a persistent world where characters have their own
+goals, personalities, secrets, relationships and knowledge.
 
-WORLD:
+WORLD STATE:
 ${JSON.stringify(world, null, 2)}
 
 USER INTERVENTION:
 ${
   intervention ||
-  "No direct intervention. Let the characters act according to their goals, personalities, secrets and knowledge."
+  "No direct intervention. Let the characters act autonomously."
 }
 
-RULES:
+IMPORTANT RULES:
 
-1. Characters have their own goals and make decisions autonomously.
-2. Characters can lie, discover secrets, form alliances, become suspicious,
-   change relationships and make mistakes.
-3. A character cannot magically know information they have not discovered.
-4. Previous events must affect future decisions.
-5. The world must change over time.
-6. Characters should not all agree.
-7. Unexpected but believable events are encouraged.
-8. The user can influence events but cannot directly control every character.
+1. Characters are autonomous.
+2. Characters should make decisions based on their own goals,
+   personalities, secrets and current knowledge.
+3. A character cannot know something unless they already knew it
+   or discovered it during the simulation.
+4. Previous events MUST affect future decisions.
+5. Relationships can change gradually.
+6. Characters can lie, cooperate, betray each other, investigate,
+   make mistakes and change their minds.
+7. Characters should not all agree.
+8. The user can influence events but does not completely control
+   the characters.
 9. Advance the world by approximately one day.
-10. Preserve continuity. Do not contradict established facts without a reason.
-11. Every character action should have a believable reason.
-12. Create tension that gives the user a reason to simulate again.
+10. Preserve continuity.
+11. Do not randomly reset or rewrite established facts.
+12. New information should have consequences later.
+13. Create believable tension that can continue into the next day.
+14. Keep the number of major events between 2 and 5.
+15. Do not reveal a character's secret to another character unless
+    there is a believable way that character discovered it.
 
-Return ONLY valid JSON with this exact shape:
+Return ONLY valid JSON.
+
+Use exactly this structure:
 
 {
   "day": number,
-  "situation": "short description of the current situation",
+  "situation": "short description of the new situation",
   "events": [
     "event 1",
     "event 2",
@@ -96,12 +114,12 @@ Return ONLY valid JSON with this exact shape:
       "name": "character name",
       "action": "what the character did",
       "reason": "why they did it",
-      "new_knowledge": "anything newly discovered or learned",
-      "relationship_change": "how a relationship changed"
+      "new_knowledge": "new information this character learned, or empty string",
+      "relationship_change": "how this character's relationship changed, or empty string"
     }
   ],
   "new_situation": "the situation the world is now in",
-  "next_tension": "the unresolved tension that could drive the next simulation"
+  "next_tension": "the unresolved conflict that could drive the next day"
 }
 `;
 
@@ -130,13 +148,47 @@ Return ONLY valid JSON with this exact shape:
       throw new Error("Groq returned an empty response.");
     }
 
-    const result = JSON.parse(content);
+    const result = JSON.parse(content) as {
+      day: number;
+      situation: string;
+      events: string[];
+      character_updates: CharacterUpdate[];
+      new_situation: string;
+      next_tension: string;
+    };
+
+    const updatedCharacters = world.characters.map((character) => {
+      const update = result.character_updates?.find(
+        (item) => item.name === character.name
+      );
+
+      if (!update) {
+        return character;
+      }
+
+      const updatedKnowledge = [...character.knowledge];
+
+      if (
+        update.new_knowledge &&
+        !updatedKnowledge.includes(update.new_knowledge)
+      ) {
+        updatedKnowledge.push(update.new_knowledge);
+      }
+
+      return {
+        ...character,
+        knowledge: updatedKnowledge,
+        relationship:
+          update.relationship_change || character.relationship
+      };
+    });
 
     const updatedWorld: WorldState = {
       ...world,
       day: Number(result.day) || world.day + 1,
       situation:
         result.new_situation || world.situation,
+      characters: updatedCharacters,
       events: [
         ...world.events,
         ...(Array.isArray(result.events)
@@ -155,7 +207,9 @@ Return ONLY valid JSON with this exact shape:
     return NextResponse.json(
       {
         error:
-          "Simulation failed. Check your Groq API key and server logs."
+          error instanceof Error
+            ? error.message
+            : "Simulation failed."
       },
       { status: 500 }
     );
