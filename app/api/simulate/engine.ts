@@ -8,7 +8,7 @@ import { chooseAction } from "./decisions";
 
 import { processPerceptions } from "./perception";
 
-import { createInitialWorld } from "./world";
+import { createInitialWorld } from "@/lib/simulation/world";
 
 import type {
   ActionType,
@@ -16,7 +16,7 @@ import type {
   Location,
   WorldEvent,
   WorldState,
-} from "./types";
+} from "@/lib/simulation/types";
 
 export type SimulationResult = {
   world: WorldState;
