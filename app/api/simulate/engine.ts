@@ -366,7 +366,20 @@ export function simulateDay(
 
   world.day += 1;
 
+  /*
+   * Legacy human-readable events used temporarily
+   * by the current frontend/timeline.
+   */
   const events: string[] = [];
+
+  /*
+   * Canonical structured events generated during
+   * this simulation step.
+   *
+   * Perception MUST use these events rather than
+   * parsing human-readable English.
+   */
+  const simulationEvents: WorldEvent[] = [];
 
   const consequences: ActionConsequence[] = [];
 
@@ -398,7 +411,7 @@ export function simulateDay(
    * 3. Consequence is applied
    * 4. Other characters perceive the resulting events
    *
-   * We will later evolve this into a more explicit:
+   * We will later evolve this into:
    *
    * PERCEIVE
    * -> INTERPRET
@@ -427,6 +440,14 @@ export function simulateDay(
       consequence
     );
 
+    /*
+     * Keep the structured event separately from
+     * the legacy English timeline.
+     */
+    simulationEvents.push(
+      consequence.worldEvent
+    );
+
     rememberAction(
       character,
       action
@@ -449,16 +470,24 @@ export function simulateDay(
   }
 
   /*
-   * Perception currently still consumes the legacy textual
-   * events. That is intentional for this step.
+   * Perception now consumes structured WorldEvent objects.
    *
-   * In the next step we will replace this with structured
-   * WorldEvent perception.
+   * It no longer parses the human-readable event strings.
+   *
+   * This means:
+   *
+   * WorldEvent
+   *      ↓
+   * visibility check
+   *      ↓
+   * interpretation
+   *      ↓
+   * knowledge / emotion / relationship changes
    */
   const perceptionResults =
     processPerceptions(
       world,
-      events
+      simulationEvents
     );
 
   for (
@@ -476,6 +505,10 @@ export function simulateDay(
 
   /*
    * Keep the legacy timeline temporarily.
+   *
+   * The timeline will eventually be generated
+   * from world.eventLog instead of storing a
+   * second independent representation.
    */
   world.events.push(
     ...events
