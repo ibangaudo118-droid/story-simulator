@@ -1,5 +1,6 @@
 import type {
   Character,
+  MemoryEntry,
   WorldState,
 } from "./types";
 
@@ -19,37 +20,327 @@ export type Motive = {
     | "LOYALTY";
 
   description: string;
+
   strength: number;
 };
 
 export type MindState = {
   characterId: string;
+
   beliefs: Belief[];
+
   motives: Motive[];
 };
 
-/* =========================================================
-   HELPERS
-========================================================= */
-
-function clamp(value: number) {
-  return Math.max(0, Math.min(100, value));
+function clamp(
+  value: number,
+  min = 0,
+  max = 100
+): number {
+  return Math.max(
+    min,
+    Math.min(max, value)
+  );
 }
 
 function hasWord(
-  value: string,
+  text: string,
   words: string[]
-) {
-  const normalized = value.toLowerCase();
+): boolean {
+  const normalized =
+    text.toLowerCase();
 
   return words.some((word) =>
     normalized.includes(word)
   );
 }
 
-/* =========================================================
-   BUILD CHARACTER MIND
-========================================================= */
+function addBelief(
+  beliefs: Belief[],
+  subject: string,
+  belief: string,
+  confidence: number
+): void {
+  const existing =
+    beliefs.find(
+      (item) =>
+        item.subject === subject &&
+        item.belief === belief
+    );
+
+  if (existing) {
+    existing.confidence =
+      Math.max(
+        existing.confidence,
+        confidence
+      );
+
+    return;
+  }
+
+  beliefs.push({
+    subject,
+    belief,
+    confidence: clamp(
+      confidence
+    ),
+  });
+}
+
+function addMotive(
+  motives: Motive[],
+  type: Motive["type"],
+  description: string,
+  strength: number
+): void {
+  const existing =
+    motives.find(
+      (motive) =>
+        motive.type === type &&
+        motive.description ===
+          description
+    );
+
+  if (existing) {
+    existing.strength =
+      Math.max(
+        existing.strength,
+        strength
+      );
+
+    return;
+  }
+
+  motives.push({
+    type,
+    description,
+    strength: clamp(
+      strength
+    ),
+  });
+}
+
+/**
+ * Convert a structured memory into
+ * something the character can believe.
+ *
+ * The memory remains the historical record.
+ * The belief is the character's interpretation
+ * of that retained experience.
+ */
+function memoryToBelief(
+  memory: MemoryEntry,
+  world: WorldState
+): Belief {
+  const source =
+    memory.sourceCharacterId
+      ? world.characters.find(
+          (character) =>
+            character.id ===
+            memory.sourceCharacterId
+        )
+      : undefined;
+
+  const subject =
+    source?.name ??
+    memory.sourceCharacterId ??
+    "the world";
+
+  return {
+    subject,
+    belief: memory.summary,
+    confidence: memory.confidence,
+  };
+}
+
+function buildMemoryBeliefs(
+  world: WorldState,
+  character: Character
+): Belief[] {
+  const beliefs: Belief[] = [];
+
+  /*
+   * Structured memory is now the primary
+   * source of character knowledge.
+   */
+  for (
+    const memory of
+      character.memories ?? []
+  ) {
+    const belief =
+      memoryToBelief(
+        memory,
+        world
+      );
+
+    addBelief(
+      beliefs,
+      belief.subject,
+      belief.belief,
+      belief.confidence
+    );
+  }
+
+  /*
+   * Temporary compatibility fallback.
+   *
+   * This allows existing characters/worlds
+   * that still contain knowledge[] to work.
+   *
+   * New simulation information should come
+   * through memories instead.
+   */
+  if (
+    (character.memories ?? [])
+      .length === 0
+  ) {
+    for (
+      const knowledge of
+        character.knowledge
+    ) {
+      addBelief(
+        beliefs,
+        "known information",
+        knowledge,
+        75
+      );
+    }
+  }
+
+  return beliefs;
+}
+
+function buildMemoryMotives(
+  world: WorldState,
+  character: Character,
+  motives: Motive[]
+): void {
+  const memories =
+    character.memories ?? [];
+
+  /*
+   * Suspicious or threatening memories
+   * strengthen curiosity/self-preservation.
+   */
+  for (
+    const memory of memories
+  ) {
+    const summary =
+      memory.summary.toLowerCase();
+
+    if (
+      hasWord(summary, [
+        "following",
+        "monitoring",
+        "suspicious",
+        "investigated",
+        "evidence",
+        "searched",
+        "discovered",
+        "threat",
+        "danger",
+      ])
+    ) {
+      addMotive(
+        motives,
+        "CURIOSITY",
+        `Understand what happened: ${memory.summary}`,
+        Math.min(
+          90,
+          35 +
+            memory.importance *
+              0.55
+        )
+      );
+    }
+
+    if (
+      hasWord(summary, [
+        "following",
+        "monitoring",
+        "danger",
+        "threat",
+        "caught",
+        "exposed",
+      ])
+    ) {
+      addMotive(
+        motives,
+        "SELF_PRESERVATION",
+        `Protect myself from what I observed: ${memory.summary}`,
+        Math.min(
+          95,
+          40 +
+            memory.importance *
+              0.6
+        )
+      );
+    }
+
+    /*
+     * High-importance memories involving
+     * another character can influence loyalty
+     * or protection.
+     */
+    if (
+      memory.importance >= 70 &&
+      memory.sourceCharacterId &&
+      memory.sourceCharacterId !==
+        character.id
+    ) {
+      const relationship =
+        character.relationships.find(
+          (item) =>
+            item.targetId ===
+            memory.sourceCharacterId
+        );
+
+      if (
+        relationship &&
+        relationship.trust >= 60
+      ) {
+        addMotive(
+          motives,
+          "LOYALTY",
+          `Respond to what happened involving someone I trust: ${memory.summary}`,
+          relationship.trust *
+            0.85
+        );
+      }
+    }
+  }
+
+  /*
+   * Recent investigation/search memories
+   * indicate unresolved curiosity.
+   */
+  const recentlyInvestigated =
+    memories.some(
+      (memory) =>
+        memory.day >=
+          world.day - 1 &&
+        hasWord(
+          memory.summary,
+          [
+            "investigated",
+            "evidence",
+            "searched",
+            "discovered",
+          ]
+        )
+    );
+
+  if (
+    recentlyInvestigated
+  ) {
+    addMotive(
+      motives,
+      "CURIOSITY",
+      "Continue investigating what I have started to uncover",
+      65
+    );
+  }
+}
 
 export function buildMindState(
   world: WorldState,
@@ -58,274 +349,303 @@ export function buildMindState(
   const beliefs: Belief[] = [];
   const motives: Motive[] = [];
 
-  /* -------------------------------------------------------
-     CORE GOAL
-  ------------------------------------------------------- */
+  /*
+   * Stable character drives.
+   *
+   * These come from the character definition,
+   * not from the event history.
+   */
+  addMotive(
+    motives,
+    "GOAL",
+    character.goal,
+    80
+  );
 
-  if (character.goal.trim()) {
-    motives.push({
-      type: "GOAL",
-      description: character.goal,
-      strength: 80,
-    });
-  }
+  addMotive(
+    motives,
+    "SELF_PRESERVATION",
+    character.fear,
+    70
+  );
 
-  /* -------------------------------------------------------
-     CORE FEAR
-  ------------------------------------------------------- */
-
-  if (character.fear.trim()) {
-    motives.push({
-      type: "FEAR",
-      description: character.fear,
-      strength: 70,
-    });
-  }
-
-  /* -------------------------------------------------------
-     CURRENT PRIORITY
-  ------------------------------------------------------- */
-
-  if (character.currentPriority.trim()) {
-    beliefs.push({
-      subject: character.id,
-      belief: `Current priority: ${character.currentPriority}`,
-      confidence: 90,
-    });
-
-    if (
-      hasWord(character.currentPriority, [
-        "protect",
-        "protecting",
-        "safe",
-        "safety",
-        "defend",
-        "help",
-      ])
-    ) {
-      motives.push({
-        type: "PROTECTION",
-        description: character.currentPriority,
-        strength: 75,
-      });
-    }
-
-    if (
-      hasWord(character.currentPriority, [
-        "hide",
-        "escape",
-        "avoid",
-        "survive",
-        "stay safe",
-      ])
-    ) {
-      motives.push({
-        type: "SELF_PRESERVATION",
-        description: character.currentPriority,
-        strength: 75,
-      });
-    }
-  }
-
-  /* -------------------------------------------------------
-     KNOWLEDGE → BELIEFS
-  ------------------------------------------------------- */
-
-  for (const knowledge of character.knowledge) {
-    if (!knowledge.trim()) {
-      continue;
-    }
-
-    beliefs.push({
-      subject: "world",
-      belief: knowledge,
-      confidence: 75,
-    });
-  }
-
-  /* -------------------------------------------------------
-     RELATIONSHIPS → SOCIAL BELIEFS + MOTIVES
-  ------------------------------------------------------- */
-
-  for (const relationship of character.relationships) {
-    const target = world.characters.find(
-      (candidate) =>
-        candidate.id === relationship.targetId
+  /*
+   * Current priority represents the character's
+   * immediate focus and is allowed to change
+   * as perceptions affect them.
+   */
+  if (
+    character.currentPriority
+  ) {
+    addBelief(
+      beliefs,
+      character.id,
+      `My current priority is: ${character.currentPriority}`,
+      90
     );
+
+    if (
+      hasWord(
+        character.currentPriority,
+        [
+          "protect",
+          "defend",
+          "help",
+          "save",
+        ]
+      )
+    ) {
+      addMotive(
+        motives,
+        "PROTECTION",
+        character.currentPriority,
+        75
+      );
+    }
+
+    if (
+      hasWord(
+        character.currentPriority,
+        [
+          "hide",
+          "escape",
+          "avoid",
+          "survive",
+          "stay safe",
+        ]
+      )
+    ) {
+      addMotive(
+        motives,
+        "SELF_PRESERVATION",
+        character.currentPriority,
+        75
+      );
+    }
+  }
+
+  /*
+   * Structured memories become beliefs.
+   */
+  const memoryBeliefs =
+    buildMemoryBeliefs(
+      world,
+      character
+    );
+
+  for (
+    const belief of
+      memoryBeliefs
+  ) {
+    addBelief(
+      beliefs,
+      belief.subject,
+      belief.belief,
+      belief.confidence
+    );
+  }
+
+  /*
+   * Relationship state becomes part of
+   * the character's current mental model.
+   */
+  for (
+    const relationship of
+      character.relationships
+  ) {
+    const target =
+      world.characters.find(
+        (item) =>
+          item.id ===
+          relationship.targetId
+      );
 
     if (!target) {
       continue;
     }
 
-    if (relationship.trust >= 60) {
-      beliefs.push({
-        subject: target.name,
-        belief: `${target.name} is someone this character trusts.`,
-        confidence: clamp(
-          relationship.trust
-        ),
-      });
+    if (
+      relationship.trust >= 60
+    ) {
+      addBelief(
+        beliefs,
+        target.name,
+        `${target.name} is someone I can trust.`,
+        relationship.trust
+      );
 
-      motives.push({
-        type: "LOYALTY",
-        description:
-          `Maintain trust with ${target.name}.`,
-        strength: clamp(
-          relationship.trust * 0.85
-        ),
-      });
+      addMotive(
+        motives,
+        "LOYALTY",
+        `Maintain my relationship with ${target.name}`,
+        relationship.trust *
+          0.85
+      );
     }
 
-    if (relationship.suspicion >= 50) {
-      beliefs.push({
-        subject: target.name,
-        belief:
-          `${target.name} may be hiding something.`,
-        confidence: clamp(
-          relationship.suspicion
-        ),
-      });
+    if (
+      relationship.suspicion >=
+      50
+    ) {
+      addBelief(
+        beliefs,
+        target.name,
+        `${target.name} may be hiding something from me.`,
+        relationship.suspicion
+      );
 
-      motives.push({
-        type: "CURIOSITY",
-        description:
-          `Understand what ${target.name} may be hiding.`,
-        strength: clamp(
-          relationship.suspicion
-        ),
-      });
+      addMotive(
+        motives,
+        "CURIOSITY",
+        `Find out what ${target.name} is hiding`,
+        relationship.suspicion
+      );
     }
   }
 
-  /* -------------------------------------------------------
-     CURIOSITY FROM BEHAVIOUR
-  ------------------------------------------------------- */
+  /*
+   * Memories can create new motives.
+   *
+   * This is the important transition:
+   *
+   * EVENT
+   *   ↓
+   * PERCEPTION
+   *   ↓
+   * MEMORY
+   *   ↓
+   * BELIEF
+   *   ↓
+   * MOTIVE
+   *   ↓
+   * DECISION
+   */
+  buildMemoryMotives(
+    world,
+    character,
+    motives
+  );
 
+  /*
+   * Emotional state can intensify motives.
+   */
   if (
-    character.recentActions.includes(
-      "INVESTIGATE"
-    ) ||
-    character.recentActions.includes(
-      "SEARCH"
+    hasWord(
+      character.emotionalState,
+      [
+        "afraid",
+        "fear",
+        "nervous",
+        "anxious",
+        "threatened",
+        "unsafe",
+        "panicked",
+        "worried",
+        "alarmed",
+        "guarded",
+      ]
     )
   ) {
-    motives.push({
-      type: "CURIOSITY",
-      description:
-        "Understand what is happening before making the next decision.",
-      strength: 65,
-    });
+    addMotive(
+      motives,
+      "SELF_PRESERVATION",
+      "I feel unsafe and need to protect myself",
+      85
+    );
   }
 
-  /* -------------------------------------------------------
-     INVESTIGATION CAPABILITY
-  ------------------------------------------------------- */
-
   if (
-    character.capabilities.some((capability) =>
-      capability
-        .toLowerCase()
-        .includes("investigation")
+    hasWord(
+      character.emotionalState,
+      [
+        "protect",
+        "caring",
+        "concerned",
+        "loyal",
+      ]
     )
   ) {
-    motives.push({
-      type: "CURIOSITY",
-      description:
-        "Use available investigative ability to reduce uncertainty.",
-      strength: 45,
-    });
+    addMotive(
+      motives,
+      "PROTECTION",
+      "Protect someone important to me",
+      65
+    );
   }
 
-  /* -------------------------------------------------------
-     EMOTIONAL STATE
-  ------------------------------------------------------- */
-
-  const emotionalState =
-    character.emotionalState.toLowerCase();
-
+  /*
+   * Character goal/fear semantics can still
+   * strengthen appropriate motives.
+   */
   if (
-    hasWord(emotionalState, [
-      "afraid",
-      "fear",
-      "nervous",
-      "anxious",
-      "threatened",
-      "unsafe",
-      "panicked",
-      "worried",
-    ])
+    hasWord(
+      character.goal,
+      [
+        "protect",
+        "save",
+        "defend",
+        "help",
+      ]
+    )
   ) {
-    motives.push({
-      type: "SELF_PRESERVATION",
-      description:
-        "Avoid actions that could expose or endanger the character.",
-      strength: 85,
-    });
-  }
-
-  /* -------------------------------------------------------
-     GOAL / FEAR SEMANTICS
-  ------------------------------------------------------- */
-
-  if (
-    hasWord(character.goal, [
-      "protect",
-      "save",
-      "defend",
-      "help",
-    ]) ||
-    hasWord(character.fear, [
-      "hurt",
-      "harm",
-      "danger",
-      "lose",
-    ])
-  ) {
-    motives.push({
-      type: "PROTECTION",
-      description:
-        "Protect something important from harm.",
-      strength: 65,
-    });
+    addMotive(
+      motives,
+      "PROTECTION",
+      character.goal,
+      65
+    );
   }
 
   if (
-    hasWord(character.fear, [
-      "exposed",
-      "discovered",
-      "caught",
-      "danger",
-      "death",
-      "lose",
-    ])
+    hasWord(
+      character.fear,
+      [
+        "hurt",
+        "harm",
+        "danger",
+        "lose",
+      ]
+    )
   ) {
-    motives.push({
-      type: "SELF_PRESERVATION",
-      description:
-        "Avoid consequences associated with the character's fears.",
-      strength: 70,
-    });
+    addMotive(
+      motives,
+      "SELF_PRESERVATION",
+      character.fear,
+      65
+    );
   }
 
   return {
-    characterId: character.id,
+    characterId:
+      character.id,
+
     beliefs,
+
     motives,
   };
 }
 
-/* =========================================================
-   BUILD ALL MIND STATES
-========================================================= */
-
 export function buildAllMindStates(
   world: WorldState
-): MindState[] {
-  return world.characters.map(
-    (character) =>
+): Record<
+  string,
+  MindState
+> {
+  const states: Record<
+    string,
+    MindState
+  > = {};
+
+  for (
+    const character of
+      world.characters
+  ) {
+    states[character.id] =
       buildMindState(
         world,
         character
-      )
-  );
-    }
+      );
+  }
+
+  return states;
+}
