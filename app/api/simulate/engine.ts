@@ -51,7 +51,9 @@ export function normalizeWorld(
   return {
     ...world,
 
-    characters: (world.characters ?? []).map(
+    characters: (
+      world.characters ?? []
+    ).map(
       (character) => ({
         ...character,
 
@@ -113,48 +115,210 @@ export function applyIntervention(
   intervention: string
 ): void {
   const event: WorldEvent = {
-    id: `intervention-${world.day}-${world.eventLog.length + 1}`,
+    id:
+      `intervention-${world.day}-${world.eventLog.length + 1}`,
 
-    type: "INTERVENTION",
+    type:
+      "INTERVENTION",
 
-    day: world.day,
+    day:
+      world.day,
 
     data: {
-      instruction: intervention,
+      instruction:
+        intervention,
     },
   };
 
-  world.eventLog.push(event);
+  world.eventLog.push(
+    event
+  );
 
   world.events.push(
     `User intervention: ${intervention}`
   );
 }
 
+function createPerceptionEvent(
+  world: WorldState,
+  perception: {
+    characterId: string;
+    sourceEventId: string;
+    interpretation: string;
+  },
+  observerLocation: string | undefined
+): WorldEvent {
+  return {
+    id:
+      "perception-" +
+      world.day +
+      "-" +
+      (world.eventLog.length + 1),
+
+    type:
+      "PERCEPTION",
+
+    day:
+      world.day,
+
+    actorId:
+      perception.characterId,
+
+    locationId:
+      observerLocation,
+
+    data: {
+      sourceEventId:
+        perception.sourceEventId,
+
+      interpretation:
+        perception.interpretation,
+    },
+  };
+}
+
 export function simulateDay(
   inputWorld: WorldState,
   intervention?: string
 ): SimulationResult {
-  const world = normalizeWorld(
-    structuredClone(inputWorld)
-  );
+  /*
+   * Work on a cloned normalized world so the caller's
+   * input object is not mutated unexpectedly.
+   */
+  const world =
+    normalizeWorld(
+      structuredClone(
+        inputWorld
+      )
+    );
 
+  /*
+   * A simulation call advances exactly one day.
+   */
   world.day += 1;
 
   const events: string[] = [];
 
-  const simulationEvents: WorldEvent[] = [];
+  const simulationEvents: WorldEvent[] =
+    [];
 
-  const consequences: ActionConsequence[] = [];
+  const consequences: ActionConsequence[] =
+    [];
 
-  if (intervention?.trim()) {
+  /*
+   * =========================================================
+   * PHASE 0 — EXISTING WORLD EVENTS
+   * =========================================================
+   *
+   * Events that already existed before this tick are
+   * processed before new decisions are made.
+   *
+   * This is important because the initial world already
+   * contains a canonical Day-1 company-meeting event.
+   *
+   * Without this phase, that event would exist in eventLog
+   * but would never enter the perception/memory pipeline.
+   */
+
+  const existingEventLocations: Record<
+    string,
+    string
+  > = {};
+
+  for (
+    const character of
+      world.characters
+  ) {
+    existingEventLocations[
+      character.id
+    ] =
+      character.location;
+  }
+
+  /*
+   * Only process events that at least one character
+   * has not processed yet.
+   *
+   * The perception layer itself also checks event identity,
+   * giving us a second protection against duplicate memories.
+   */
+  const priorEvents =
+    world.eventLog.filter(
+      (event) =>
+        world.characters.some(
+          (character) =>
+            !(
+              character.processedEventIds ??
+              []
+            ).includes(
+              event.id
+            )
+        )
+    );
+
+  const priorPerceptions =
+    processPerceptions(
+      world,
+      priorEvents,
+      existingEventLocations
+    );
+
+  for (
+    const perception of
+      priorPerceptions
+  ) {
+    const observer =
+      world.characters.find(
+        (character) =>
+          character.id ===
+          perception.characterId
+      );
+
+    const observerLocation =
+      existingEventLocations[
+        perception.characterId
+      ] ??
+      observer?.location;
+
+    const perceptionEvent =
+      createPerceptionEvent(
+        world,
+        perception,
+        observerLocation
+      );
+
+    world.eventLog.push(
+      perceptionEvent
+    );
+
+    world.events.push(
+      perception.interpretation
+    );
+  }
+
+  /*
+   * =========================================================
+   * PHASE 1 — INTERVENTION
+   * =========================================================
+   *
+   * An intervention is recorded as a world event.
+   *
+   * It is NOT automatically converted into an action.
+   * This keeps the current contract honest.
+   */
+  if (
+    intervention?.trim()
+  ) {
+    const cleanedIntervention =
+      intervention.trim();
+
     applyIntervention(
       world,
-      intervention.trim()
+      cleanedIntervention
     );
 
     events.push(
-      `User intervention: ${intervention.trim()}`
+      `User intervention: ${cleanedIntervention}`
     );
   }
 
@@ -164,26 +328,76 @@ export function simulateDay(
 
   /*
    * =========================================================
-   * PHASE 1 — DECISION
+   * PHASE 2 — SNAPSHOT CHARACTER LOCATIONS
    * =========================================================
    *
-   * Every character decides from the SAME world state.
+   * We capture where every character is BEFORE any
+   * action executes.
    *
-   * No character's action has executed yet.
-   * Therefore Zara cannot accidentally influence
-   * Daniel's decision simply because Zara appears first
-   * in the characters array.
+   * This snapshot is critical for perception.
+   *
+   * Example:
+   *
+   * Zara is at the cafe.
+   * Daniel moves from the cafe to the office.
+   *
+   * Daniel's MOVE happened at the cafe.
+   *
+   * Zara must be able to perceive that event even
+   * though Daniel's final location is now the office.
+   *
+   * Conversely, if Zara herself moved during this tick,
+   * her ability to perceive another character's action
+   * is evaluated using Zara's location at the time
+   * those actions occurred.
    */
-  const decisions: Record<
+  const preActionLocations: Record<
     string,
-    ReturnType<typeof chooseAction>
+    string
   > = {};
 
   for (
     const character of
       world.characters
   ) {
-    decisions[character.id] =
+    preActionLocations[
+      character.id
+    ] =
+      character.location;
+  }
+
+  /*
+   * =========================================================
+   * PHASE 3 — DECISION
+   * =========================================================
+   *
+   * Every character decides from the SAME world state.
+   *
+   * No action has executed yet.
+   *
+   * Therefore:
+   *
+   * Zara's action cannot alter Daniel's decision.
+   * Daniel's action cannot alter Zara's decision.
+   *
+   * Both decisions represent the characters'
+   * responses to the world at the beginning
+   * of this simulation tick.
+   */
+  const decisions: Record<
+    string,
+    ReturnType<
+      typeof chooseAction
+    >
+  > = {};
+
+  for (
+    const character of
+      world.characters
+  ) {
+    decisions[
+      character.id
+    ] =
       chooseAction(
         world,
         character
@@ -192,20 +406,34 @@ export function simulateDay(
 
   /*
    * =========================================================
-   * PHASE 2 — ACTION
+   * PHASE 4 — ACTION
    * =========================================================
    *
    * Execute the decisions that were already made.
    *
-   * Consequences can change the world, but they cannot
-   * change another character's decision for this tick.
+   * Consequences may change world state,
+   * but they cannot retroactively change another
+   * character's decision for this tick.
    */
   for (
     const character of
       world.characters
   ) {
     const decision =
-      decisions[character.id];
+      decisions[
+        character.id
+      ];
+
+    /*
+     * Defensive guard:
+     *
+     * Every normalized character should have a decision.
+     * If one somehow does not, skip execution rather than
+     * causing the entire simulation to crash.
+     */
+    if (!decision) {
+      continue;
+    }
 
     const consequence =
       executeAction(
@@ -249,21 +477,41 @@ export function simulateDay(
 
   /*
    * =========================================================
-   * PHASE 3 — PERCEPTION
+   * PHASE 5 — PERCEPTION
    * =========================================================
    *
-   * Characters now process what happened.
+   * Characters now perceive the actions that occurred
+   * during this tick.
    *
-   * Perceptions are recorded as canonical WorldEvents.
-   * This keeps the eventLog as the causal history of the
-   * simulation instead of hiding perception in events[].
+   * IMPORTANT:
+   *
+   * preActionLocations is supplied to the perception
+   * system so perception is evaluated against the
+   * event-time location rather than the character's
+   * final location after all movement has occurred.
    */
   const perceptionResults =
     processPerceptions(
       world,
-      simulationEvents
+      simulationEvents,
+      preActionLocations
     );
 
+  /*
+   * Perception itself is recorded as a canonical event.
+   *
+   * These perception events describe what a character
+   * believes they perceived. They do NOT replace the
+   * original ACTION event.
+   *
+   * Therefore:
+   *
+   * ACTION
+   *   ↓
+   * PERCEPTION
+   *
+   * remains explicit in the event history.
+   */
   for (
     const perception of
       perceptionResults
@@ -274,41 +522,17 @@ export function simulateDay(
       continue;
     }
 
-    const observer =
-      world.characters.find(
-        (character) =>
-          character.id ===
-          perception.characterId
+    const observerLocation =
+      preActionLocations[
+        perception.characterId
+      ];
+
+    const perceptionEvent =
+      createPerceptionEvent(
+        world,
+        perception,
+        observerLocation
       );
-
-    const perceptionEvent:
-      WorldEvent = {
-        id:
-          "perception-" +
-          world.day +
-          "-" +
-          (world.eventLog.length + 1),
-
-        type:
-          "PERCEPTION",
-
-        day:
-          world.day,
-
-        actorId:
-          perception.characterId,
-
-        locationId:
-          observer?.location,
-
-        data: {
-          sourceEventId:
-            perception.sourceEventId,
-
-          interpretation:
-            perception.interpretation,
-        },
-      };
 
     world.eventLog.push(
       perceptionEvent
@@ -320,14 +544,26 @@ export function simulateDay(
   }
 
   /*
-   * Legacy human-readable event list.
+   * =========================================================
+   * LEGACY PRESENTATION STATE
+   * =========================================================
    *
-   * The canonical source remains eventLog.
+   * eventLog remains the canonical source of truth.
+   *
+   * events[] is retained temporarily for compatibility
+   * with existing frontend/API code.
    */
   world.events.push(
     ...events
   );
 
+  /*
+   * situation is also presentation state.
+   *
+   * It is deliberately derived from the human-readable
+   * events generated during this tick rather than being
+   * treated as the simulation's canonical history.
+   */
   world.situation =
     events.join(" ");
 
