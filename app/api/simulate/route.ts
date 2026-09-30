@@ -33,14 +33,17 @@ export async function POST(
       );
 
     /*
-     * The engine internally stores
-     * character updates as a Record
+     * The engine stores character updates
      * keyed by character ID.
      *
-     * The frontend expects an array,
-     * so we transform it here at the
-     * API boundary.
+     * Each ActionConsequence contains the
+     * actual structured changes produced by
+     * that character's action.
+     *
+     * We expose those real changes here
+     * instead of returning empty placeholders.
      */
+
     const characterUpdates =
       result.world.characters.map(
         (character) => {
@@ -48,6 +51,76 @@ export async function POST(
             result.characterUpdates[
               character.id
             ];
+
+          const consequence =
+            result.consequences.find(
+              item =>
+                item.actorId ===
+                character.id
+            );
+
+          const relationshipChanges =
+            consequence
+              ?.relationshipChanges ?? [];
+
+          const relationshipChangeText =
+            relationshipChanges.length > 0
+              ? relationshipChanges
+                  .map(change => {
+                    const target =
+                      result.world.characters.find(
+                        targetCharacter =>
+                          targetCharacter.id ===
+                          change.targetId
+                      );
+
+                    const targetName =
+                      target?.name ??
+                      change.targetId;
+
+                    const parts: string[] =
+                      [];
+
+                    if (
+                      typeof change.trustDelta ===
+                      "number" &&
+                      change.trustDelta !== 0
+                    ) {
+                      parts.push(
+                        `trust ${
+                          change.trustDelta > 0
+                            ? "+"
+                            : ""
+                        }${change.trustDelta}`
+                      );
+                    }
+
+                    if (
+                      typeof change.suspicionDelta ===
+                      "number" &&
+                      change.suspicionDelta !== 0
+                    ) {
+                      parts.push(
+                        `suspicion ${
+                          change.suspicionDelta > 0
+                            ? "+"
+                            : ""
+                        }${change.suspicionDelta}`
+                      );
+                    }
+
+                    if (
+                      parts.length === 0
+                    ) {
+                      return `${targetName}: relationship changed`;
+                    }
+
+                    return `${targetName}: ${parts.join(
+                      ", "
+                    )}`;
+                  })
+                  .join("; ")
+              : "";
 
           return {
             name:
@@ -62,16 +135,20 @@ export async function POST(
               "",
 
             new_knowledge:
-              "",
+              consequence?.knowledgeGained
+                ?.filter(Boolean)
+                .join("; ") ?? "",
 
             relationship_change:
-              "",
+              relationshipChangeText,
 
             emotional_change:
-              character.emotionalState,
+              consequence?.emotionalChange ??
+              "",
 
             new_priority:
-              character.currentPriority,
+              consequence?.priorityChange ??
+              "",
           };
         }
       );
@@ -103,12 +180,12 @@ export async function POST(
             result.nextTension,
 
           /*
-           * Interventions are now structured
-           * WorldEvents inside the engine.
+           * The intervention is recorded in the
+           * canonical event log.
            *
-           * We deliberately do not pretend
-           * that the intervention has a direct
-           * guaranteed "effect".
+           * We do not claim that the user's
+           * instruction directly caused a specific
+           * character action.
            */
           intervention:
             intervention
@@ -118,6 +195,9 @@ export async function POST(
 
                   text:
                     intervention,
+
+                  effect:
+                    "Recorded as a world event. Characters were not directly forced to execute it.",
                 }
               : null,
         },
