@@ -120,14 +120,6 @@ function addMotive(
   });
 }
 
-/**
- * Convert a structured memory into
- * something the character can believe.
- *
- * The memory remains the historical record.
- * The belief is the character's interpretation
- * of that retained experience.
- */
 function memoryToBelief(
   memory: MemoryEntry,
   world: WorldState
@@ -159,10 +151,6 @@ function buildMemoryBeliefs(
 ): Belief[] {
   const beliefs: Belief[] = [];
 
-  /*
-   * Structured memory is now the primary
-   * source of character knowledge.
-   */
   for (
     const memory of
       character.memories ?? []
@@ -181,15 +169,6 @@ function buildMemoryBeliefs(
     );
   }
 
-  /*
-   * Temporary compatibility fallback.
-   *
-   * This allows existing characters/worlds
-   * that still contain knowledge[] to work.
-   *
-   * New simulation information should come
-   * through memories instead.
-   */
   if (
     (character.memories ?? [])
       .length === 0
@@ -218,10 +197,6 @@ function buildMemoryMotives(
   const memories =
     character.memories ?? [];
 
-  /*
-   * Suspicious or threatening memories
-   * strengthen curiosity/self-preservation.
-   */
   for (
     const memory of memories
   ) {
@@ -277,11 +252,6 @@ function buildMemoryMotives(
       );
     }
 
-    /*
-     * High-importance memories involving
-     * another character can influence loyalty
-     * or protection.
-     */
     if (
       memory.importance >= 70 &&
       memory.sourceCharacterId &&
@@ -310,10 +280,6 @@ function buildMemoryMotives(
     }
   }
 
-  /*
-   * Recent investigation/search memories
-   * indicate unresolved curiosity.
-   */
   const recentlyInvestigated =
     memories.some(
       (memory) =>
@@ -349,12 +315,6 @@ export function buildMindState(
   const beliefs: Belief[] = [];
   const motives: Motive[] = [];
 
-  /*
-   * Stable character drives.
-   *
-   * These come from the character definition,
-   * not from the event history.
-   */
   addMotive(
     motives,
     "GOAL",
@@ -362,6 +322,24 @@ export function buildMindState(
     80
   );
 
+  /*
+   * FEAR is now a distinct motive.
+   * This preserves the character's stated fear
+   * instead of incorrectly treating fear only
+   * as self-preservation.
+   */
+  addMotive(
+    motives,
+    "FEAR",
+    character.fear,
+    70
+  );
+
+  /*
+   * Self-preservation is related to fear,
+   * but represents the behavioral response
+   * to feeling threatened.
+   */
   addMotive(
     motives,
     "SELF_PRESERVATION",
@@ -369,11 +347,6 @@ export function buildMindState(
     70
   );
 
-  /*
-   * Current priority represents the character's
-   * immediate focus and is allowed to change
-   * as perceptions affect them.
-   */
   if (
     character.currentPriority
   ) {
@@ -424,9 +397,6 @@ export function buildMindState(
     }
   }
 
-  /*
-   * Structured memories become beliefs.
-   */
   const memoryBeliefs =
     buildMemoryBeliefs(
       world,
@@ -445,10 +415,6 @@ export function buildMindState(
     );
   }
 
-  /*
-   * Relationship state becomes part of
-   * the character's current mental model.
-   */
   for (
     const relationship of
       character.relationships
@@ -503,32 +469,12 @@ export function buildMindState(
     }
   }
 
-  /*
-   * Memories can create new motives.
-   *
-   * This is the important transition:
-   *
-   * EVENT
-   *   ↓
-   * PERCEPTION
-   *   ↓
-   * MEMORY
-   *   ↓
-   * BELIEF
-   *   ↓
-   * MOTIVE
-   *   ↓
-   * DECISION
-   */
   buildMemoryMotives(
     world,
     character,
     motives
   );
 
-  /*
-   * Emotional state can intensify motives.
-   */
   if (
     hasWord(
       character.emotionalState,
@@ -573,10 +519,6 @@ export function buildMindState(
     );
   }
 
-  /*
-   * Character goal/fear semantics can still
-   * strengthen appropriate motives.
-   */
   if (
     hasWord(
       character.goal,
