@@ -1,4 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import {
+  NextRequest,
+  NextResponse,
+} from "next/server";
 
 import {
   normalizeWorld,
@@ -29,7 +32,6 @@ export async function POST(
         intervention
       );
 
-
     /*
      * The engine internally stores
      * character updates as a Record
@@ -39,11 +41,9 @@ export async function POST(
      * so we transform it here at the
      * API boundary.
      */
-
     const characterUpdates =
       result.world.characters.map(
         (character) => {
-
           const update =
             result.characterUpdates[
               character.id
@@ -76,7 +76,6 @@ export async function POST(
         }
       );
 
-
     return NextResponse.json(
       {
         success: true,
@@ -103,6 +102,14 @@ export async function POST(
           next_tension:
             result.nextTension,
 
+          /*
+           * Interventions are now structured
+           * WorldEvents inside the engine.
+           *
+           * We deliberately do not pretend
+           * that the intervention has a direct
+           * guaranteed "effect".
+           */
           intervention:
             intervention
               ? {
@@ -111,9 +118,6 @@ export async function POST(
 
                   text:
                     intervention,
-
-                  effect:
-                    result.interventionEffect,
                 }
               : null,
         },
@@ -126,9 +130,7 @@ export async function POST(
         },
       }
     );
-
   } catch (error) {
-
     console.error(
       "Simulation API error:",
       error
