@@ -3,7 +3,7 @@ import type {
   Character,
   WorldEvent,
   WorldState,
-} from "./types";
+} from "@/lib/simulation/types";
 
 export type RelationshipChange = {
   /**
