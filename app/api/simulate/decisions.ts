@@ -89,6 +89,7 @@ function getMotiveStrength(
 }
 
 function getMemorySignal(
+  world: WorldState,
   character: Character,
   keywords: string[]
 ): number {
@@ -116,36 +117,32 @@ function getMemorySignal(
     }
 
     /*
-     * More important and more recent
-     * memories should influence decisions
-     * more strongly.
+     * Memory strength decays with the
+     * passage of simulation time.
+     *
+     * Day 0 = strongest
+     * Day 1 = slightly weaker
+     * Days 2-3 = moderately weaker
+     * Older memories = still relevant,
+     * but significantly weaker
      */
-    const age =
-      Math.max(
-        0,
-        character.memories
-          ? Math.max(
-              0,
-              memory.day -
-                Math.max(
-                  ...memories.map(
-                    (item) =>
-                      item.day
-                  )
-                )
-            )
-          : 0
-      );
+    const age = Math.max(
+      0,
+      world.day - memory.day
+    );
 
     const recencyMultiplier =
       age === 0
         ? 1
-        : 0.75;
+        : age === 1
+          ? 0.85
+          : age <= 3
+            ? 0.65
+            : 0.4;
 
     signal +=
       memory.importance *
-      memory.confidence /
-      100 *
+      (memory.confidence / 100) *
       matches *
       recencyMultiplier;
   }
@@ -319,6 +316,7 @@ function scoreAction(
        */
       score +=
         getMemorySignal(
+          world,
           character,
           [
             "evidence",
@@ -340,6 +338,7 @@ function scoreAction(
 
       score +=
         getMemorySignal(
+          world,
           character,
           [
             "evidence",
@@ -378,6 +377,7 @@ function scoreAction(
        */
       score -=
         getMemorySignal(
+          world,
           character,
           [
             "following",
@@ -418,6 +418,7 @@ function scoreAction(
        */
       score +=
         getMemorySignal(
+          world,
           character,
           [
             "following",
@@ -478,6 +479,7 @@ function scoreAction(
    */
   const threatSignal =
     getMemorySignal(
+      world,
       character,
       [
         "following",
