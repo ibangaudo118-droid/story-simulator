@@ -1,12 +1,22 @@
-import type { Character, WorldState } from "./types";
+import type {
+  Character,
+  WorldEvent,
+  WorldState,
+} from "./types";
 
 export type PerceptionResult = {
   characterId: string;
-  sourceEvent: string;
+
+  sourceEventId: string;
+
   interpretation: string;
+
   knowledgeGained: string[];
+
   emotionalChange?: string;
+
   priorityChange?: string;
+
   relationshipChanges: {
     targetId: string;
     trustDelta?: number;
@@ -14,8 +24,15 @@ export type PerceptionResult = {
   }[];
 };
 
-function clamp(value: number, min = 0, max = 100): number {
-  return Math.max(min, Math.min(max, value));
+function clamp(
+  value: number,
+  min = 0,
+  max = 100
+): number {
+  return Math.max(
+    min,
+    Math.min(max, value)
+  );
 }
 
 function findCharacter(
@@ -23,20 +40,24 @@ function findCharacter(
   id: string
 ): Character | undefined {
   return world.characters.find(
-    (character) => character.id === id
+    (character) =>
+      character.id === id
   );
 }
 
 function addKnowledge(
   character: Character,
   knowledge: string
-): boolean {
-  if (character.knowledge.includes(knowledge)) {
-    return false;
+): void {
+  if (
+    !character.knowledge.includes(
+      knowledge
+    )
+  ) {
+    character.knowledge.push(
+      knowledge
+    );
   }
-
-  character.knowledge.push(knowledge);
-  return true;
 }
 
 function updateRelationship(
@@ -45,419 +66,614 @@ function updateRelationship(
   trustDelta = 0,
   suspicionDelta = 0
 ): void {
-  const relationship = character.relationships.find(
-    (relationship) => relationship.targetId === targetId
-  );
+  const relationship =
+    character.relationships.find(
+      (relationship) =>
+        relationship.targetId ===
+        targetId
+    );
 
   if (!relationship) {
     return;
   }
 
   relationship.trust = clamp(
-    relationship.trust + trustDelta
+    relationship.trust +
+      trustDelta
   );
 
   relationship.suspicion = clamp(
-    relationship.suspicion + suspicionDelta
+    relationship.suspicion +
+      suspicionDelta
   );
 }
 
+/**
+ * Check whether a character has already processed
+ * this exact simulation event.
+ *
+ * IMPORTANT:
+ * We use event identity, not the English interpretation.
+ *
+ * Therefore:
+ *
+ * FOLLOW event #12
+ * FOLLOW event #18
+ *
+ * are two different events and can both affect a character.
+ */
 function alreadyProcessed(
   character: Character,
-  interpretation: string
+  eventId: string
 ): boolean {
-  return character.knowledge.includes(
-    `INTERPRETATION:${interpretation}`
-  );
+  return (
+    character.processedEventIds ??
+    []
+  ).includes(eventId);
 }
 
-function rememberInterpretation(
+function rememberEvent(
   character: Character,
-  interpretation: string
+  eventId: string
 ): void {
-  character.knowledge.push(
-    `INTERPRETATION:${interpretation}`
-  );
+  character.processedEventIds ??= [];
+
+  if (
+    !character.processedEventIds.includes(
+      eventId
+    )
+  ) {
+    character.processedEventIds.push(
+      eventId
+    );
+  }
 }
 
+/**
+ * Determine whether an event can physically
+ * reach the observer.
+ *
+ * This is intentionally conservative.
+ *
+ * Current visibility rules:
+ *
+ * 1. An actor can always process their own event.
+ * 2. A character at the same location can potentially
+ *    observe an ordinary action.
+ * 3. An event with a target can be observed by that target
+ *    when they are at the event location.
+ * 4. Characters elsewhere cannot observe the event.
+ *
+ * Later we can add:
+ * - private conversations
+ * - line of sight
+ * - distance
+ * - sound
+ * - hidden actions
+ * - surveillance
+ * - information passed by another character
+ */
 function canObserve(
+  world: WorldState,
   observer: Character,
-  event: string
+  event: WorldEvent
 ): boolean {
-  const lower = event.toLowerCase();
-
-  /*
-   * Events involving a character can normally be observed
-   * when both characters are in the same location.
-   */
-  const mentionsObserver =
-    lower.includes(observer.name.toLowerCase());
-
-  if (mentionsObserver) {
+  if (
+    event.actorId ===
+    observer.id
+  ) {
     return true;
   }
 
+  if (
+    !event.locationId
+  ) {
+    return false;
+  }
+
+  if (
+    observer.location !==
+    event.locationId
+  ) {
+    return false;
+  }
+
+  /*
+   * If this event directly targets the observer,
+   * they are eligible to notice it.
+   */
+  if (
+    event.targetId ===
+    observer.id
+  ) {
+    return true;
+  }
+
+  /*
+   * Ordinary actions occurring at the same
+   * location are observable for now.
+   */
   return true;
+}
+
+function getTarget(
+  world: WorldState,
+  event: WorldEvent
+): Character | undefined {
+  if (!event.targetId) {
+    return undefined;
+  }
+
+  return findCharacter(
+    world,
+    event.targetId
+  );
 }
 
 function interpretEvent(
   world: WorldState,
   observer: Character,
-  event: string
+  event: WorldEvent
 ): PerceptionResult | null {
-  const lower = event.toLowerCase();
-
-  /*
-   * Prevent the same character from processing the same
-   * meaningful event twice.
-   */
-  let target: Character | undefined;
-
-  for (const character of world.characters) {
-    if (
-      character.id !== observer.id &&
-      lower.includes(character.name.toLowerCase())
-    ) {
-      target = character;
-      break;
-    }
-  }
-
-  /*
-   * Zara notices Daniel moving.
-   */
   if (
-    observer.id === "zara" &&
-    target?.id === "daniel" &&
-    lower.includes("moves to")
+    alreadyProcessed(
+      observer,
+      event.id
+    )
   ) {
-    const interpretation =
-      "Daniel's movement may reveal what he is trying to do.";
-
-    if (alreadyProcessed(observer, interpretation)) {
-      return null;
-    }
-
-    rememberInterpretation(observer, interpretation);
-
-    return {
-      characterId: observer.id,
-      sourceEvent: event,
-      interpretation,
-      knowledgeGained: [
-        "Daniel has changed location while Zara is investigating the company.",
-      ],
-      emotionalChange: "More suspicious and alert",
-      priorityChange:
-        "Determine why Daniel is moving and whether he is avoiding scrutiny",
-      relationshipChanges: [
-        {
-          targetId: "daniel",
-          suspicionDelta: 5,
-        },
-      ],
-    };
+    return null;
   }
 
   /*
-   * Daniel notices Zara investigating.
-   */
-  if (
-    observer.id === "daniel" &&
-    lower.includes("zara") &&
-    lower.includes("investigat")
-  ) {
-    const interpretation =
-      "Zara has discovered something that could put Daniel at risk.";
-
-    if (alreadyProcessed(observer, interpretation)) {
-      return null;
-    }
-
-    rememberInterpretation(observer, interpretation);
-
-    return {
-      characterId: observer.id,
-      sourceEvent: event,
-      interpretation,
-      knowledgeGained: [
-        "Zara has discovered evidence connected to the company.",
-      ],
-      emotionalChange: "Nervous and guarded",
-      priorityChange:
-        "Find out how much Zara knows about the company",
-      relationshipChanges: [
-        {
-          targetId: "zara",
-          suspicionDelta: 5,
-        },
-      ],
-    };
-  }
-
-  /*
-   * Zara questions Daniel.
-   */
-  if (
-    observer.id === "zara" &&
-    target?.id === "daniel" &&
-    lower.includes("questions daniel")
-  ) {
-    const interpretation =
-      "Daniel's behaviour gives Zara another reason to suspect he is hiding information.";
-
-    if (alreadyProcessed(observer, interpretation)) {
-      return null;
-    }
-
-    rememberInterpretation(observer, interpretation);
-
-    return {
-      characterId: observer.id,
-      sourceEvent: event,
-      interpretation,
-      knowledgeGained: [
-        "Daniel may know more about the company than he admits.",
-      ],
-      emotionalChange: "Alert and questioning",
-      priorityChange:
-        "Determine how much Daniel knows about the company",
-      relationshipChanges: [
-        {
-          targetId: "daniel",
-          suspicionDelta: 6,
-        },
-      ],
-    };
-  }
-
-  /*
-   * Daniel talks while deliberately hiding information.
-   */
-  if (
-    observer.id === "zara" &&
-    target?.id === "daniel" &&
-    lower.includes("avoids revealing")
-  ) {
-    const interpretation =
-      "Daniel is deliberately withholding information from Zara.";
-
-    if (alreadyProcessed(observer, interpretation)) {
-      return null;
-    }
-
-    rememberInterpretation(observer, interpretation);
-
-    return {
-      characterId: observer.id,
-      sourceEvent: event,
-      interpretation,
-      knowledgeGained: [
-        "Daniel deliberately avoided answering questions about the company.",
-      ],
-      emotionalChange: "Suspicious and focused",
-      priorityChange:
-        "Determine what Daniel is hiding",
-      relationshipChanges: [
-        {
-          targetId: "daniel",
-          suspicionDelta: 8,
-          trustDelta: -2,
-        },
-      ],
-    };
-  }
-
-  /*
-   * Daniel realizes Zara is following him.
-   */
-  if (
-    observer.id === "daniel" &&
-    target?.id === "zara" &&
-    lower.includes("follows")
-  ) {
-    const interpretation =
-      "Zara is actively monitoring Daniel.";
-
-    if (alreadyProcessed(observer, interpretation)) {
-      return null;
-    }
-
-    rememberInterpretation(observer, interpretation);
-
-    return {
-      characterId: observer.id,
-      sourceEvent: event,
-      interpretation,
-      knowledgeGained: [
-        "Zara is actively following Daniel.",
-      ],
-      emotionalChange: "Alarmed and guarded",
-      priorityChange:
-        "Find out how much Zara knows before revealing anything",
-      relationshipChanges: [
-        {
-          targetId: "zara",
-          suspicionDelta: 8,
-        },
-      ],
-    };
-  }
-
-  /*
-   * Zara discovers evidence.
-   */
-  if (
-    observer.id === "zara" &&
-    lower.includes("discovers useful evidence")
-  ) {
-    const interpretation =
-      "The investigation produced evidence that may explain the company's activity.";
-
-    if (alreadyProcessed(observer, interpretation)) {
-      return null;
-    }
-
-    rememberInterpretation(observer, interpretation);
-
-    return {
-      characterId: observer.id,
-      sourceEvent: event,
-      interpretation,
-      knowledgeGained: [
-        "The company's private recruitment of students may be part of a larger operation.",
-      ],
-      emotionalChange: "More suspicious but increasingly confident",
-      priorityChange:
-        "Determine where the company's student meetings are taking place",
-      relationshipChanges: [],
-    };
-  }
-
-  /*
-   * Searching produces a clue.
-   */
-  if (
-    observer.id === "zara" &&
-    lower.includes("searches the area")
-  ) {
-    const interpretation =
-      "The location may contain clues about the company's student meetings.";
-
-    if (alreadyProcessed(observer, interpretation)) {
-      return null;
-    }
-
-    rememberInterpretation(observer, interpretation);
-
-    return {
-      characterId: observer.id,
-      sourceEvent: event,
-      interpretation,
-      knowledgeGained: [
-        "The current area may be connected to the company's student meetings.",
-      ],
-      emotionalChange: "Focused and suspicious",
-      priorityChange:
-        "Determine where the company's student meetings are taking place",
-      relationshipChanges: [],
-    };
-  }
-
-  /*
-   * Generic investigation perception.
+   * The actor does not need to "discover"
+   * their own action through perception.
    *
-   * Only generate it once. This prevents the repeated
-   * "event is noticeable..." spam from previous versions.
+   * Their action has already been applied.
    */
   if (
-    observer.id === "zara" &&
-    lower.includes("investigates")
+    event.actorId ===
+    observer.id
   ) {
-    const interpretation =
-      "Zara's investigation confirms that the company remains worth investigating.";
+    rememberEvent(
+      observer,
+      event.id
+    );
 
-    if (alreadyProcessed(observer, interpretation)) {
-      return null;
-    }
+    return null;
+  }
 
-    rememberInterpretation(observer, interpretation);
+  const actor =
+    event.actorId
+      ? findCharacter(
+          world,
+          event.actorId
+        )
+      : undefined;
+
+  const target =
+    getTarget(
+      world,
+      event
+    );
+
+  const action =
+    event.data.action;
+
+  if (
+    typeof action !==
+    "string"
+  ) {
+    rememberEvent(
+      observer,
+      event.id
+    );
+
+    return null;
+  }
+
+  /*
+   * FOLLOW
+   *
+   * This is the first important actor/observer
+   * feedback loop.
+   */
+  if (
+    action === "FOLLOW" &&
+    target?.id === observer.id &&
+    actor
+  ) {
+    rememberEvent(
+      observer,
+      event.id
+    );
 
     return {
-      characterId: observer.id,
-      sourceEvent: event,
-      interpretation,
-      knowledgeGained: [],
-      emotionalChange: observer.emotionalState,
-      priorityChange: observer.currentPriority,
+      characterId:
+        observer.id,
+
+      sourceEventId:
+        event.id,
+
+      interpretation:
+        `${actor.name} appears to be following ${observer.name}.`,
+
+      knowledgeGained: [
+        `${actor.name} is actively monitoring ${observer.name}.`,
+      ],
+
+      emotionalChange:
+        "Alarmed and guarded",
+
+      priorityChange:
+        `Work out why ${actor.name} is following me`,
+
+      relationshipChanges: [
+        {
+          targetId:
+            actor.id,
+
+          suspicionDelta: 10,
+        },
+      ],
+    };
+  }
+
+  /*
+   * TALK
+   */
+  if (
+    action === "TALK" &&
+    target &&
+    actor
+  ) {
+    rememberEvent(
+      observer,
+      event.id
+    );
+
+    return {
+      characterId:
+        observer.id,
+
+      sourceEventId:
+        event.id,
+
+      interpretation:
+        `${actor.name} is speaking with ${target.name}.`,
+
+      knowledgeGained: [
+        `${actor.name} spoke with ${target.name}.`,
+      ],
+
+      emotionalChange:
+        observer.emotionalState,
+
+      priorityChange:
+        observer.currentPriority,
+
       relationshipChanges: [],
     };
   }
+
+  /*
+   * MOVE
+   */
+  if (
+    action === "MOVE" &&
+    actor
+  ) {
+    const from =
+      event.data.from;
+
+    const to =
+      event.data.to;
+
+    rememberEvent(
+      observer,
+      event.id
+    );
+
+    return {
+      characterId:
+        observer.id,
+
+      sourceEventId:
+        event.id,
+
+      interpretation:
+        `${actor.name} moved from ${String(from)} to ${String(to)}.`,
+
+      knowledgeGained: [
+        `${actor.name} moved to ${String(to)}.`,
+      ],
+
+      emotionalChange:
+        observer.emotionalState,
+
+      priorityChange:
+        observer.currentPriority,
+
+      relationshipChanges: [],
+    };
+  }
+
+  /*
+   * INVESTIGATE
+   */
+  if (
+    action === "INVESTIGATE" &&
+    actor
+  ) {
+    const evidenceFound =
+      event.data.evidenceFound ===
+      true;
+
+    rememberEvent(
+      observer,
+      event.id
+    );
+
+    if (
+      !evidenceFound
+    ) {
+      return {
+        characterId:
+          observer.id,
+
+        sourceEventId:
+          event.id,
+
+        interpretation:
+          `${actor.name} investigated the situation but did not uncover new evidence.`,
+
+        knowledgeGained: [],
+
+        emotionalChange:
+          observer.emotionalState,
+
+        priorityChange:
+          observer.currentPriority,
+
+        relationshipChanges: [],
+      };
+    }
+
+    return {
+      characterId:
+        observer.id,
+
+      sourceEventId:
+        event.id,
+
+      interpretation:
+        `${actor.name} discovered new evidence while investigating.`,
+
+      knowledgeGained: [
+        `${actor.name} discovered evidence connected to the company.`,
+      ],
+
+      emotionalChange:
+        "More alert and suspicious",
+
+      priorityChange:
+        observer.currentPriority,
+
+      relationshipChanges: [],
+    };
+  }
+
+  /*
+   * SEARCH
+   */
+  if (
+    action === "SEARCH" &&
+    actor
+  ) {
+    const knowledge =
+      event.data
+        .knowledgeFound;
+
+    rememberEvent(
+      observer,
+      event.id
+    );
+
+    return {
+      characterId:
+        observer.id,
+
+      sourceEventId:
+        event.id,
+
+      interpretation:
+        `${actor.name} searched the area.`,
+
+      knowledgeGained:
+        typeof knowledge ===
+        "string"
+          ? [
+              `${actor.name} discovered: ${knowledge}`,
+            ]
+          : [],
+
+      emotionalChange:
+        observer.emotionalState,
+
+      priorityChange:
+        observer.currentPriority,
+
+      relationshipChanges: [],
+    };
+  }
+
+  /*
+   * OBSERVE
+   */
+  if (
+    action === "OBSERVE" &&
+    actor
+  ) {
+    rememberEvent(
+      observer,
+      event.id
+    );
+
+    return {
+      characterId:
+        observer.id,
+
+      sourceEventId:
+        event.id,
+
+      interpretation:
+        `${actor.name} is carefully observing the surroundings.`,
+
+      knowledgeGained: [],
+
+      emotionalChange:
+        observer.emotionalState,
+
+      priorityChange:
+        observer.currentPriority,
+
+      relationshipChanges: [],
+    };
+  }
+
+  /*
+   * WAIT
+   */
+  if (
+    action === "WAIT" &&
+    actor
+  ) {
+    rememberEvent(
+      observer,
+      event.id
+    );
+
+    return {
+      characterId:
+        observer.id,
+
+      sourceEventId:
+        event.id,
+
+      interpretation:
+        `${actor.name} chose to wait.`,
+
+      knowledgeGained: [],
+
+      emotionalChange:
+        observer.emotionalState,
+
+      priorityChange:
+        observer.currentPriority,
+
+      relationshipChanges: [],
+    };
+  }
+
+  /*
+   * Unknown event/action.
+   *
+   * Mark it processed so the observer does not
+   * repeatedly reconsider the same event.
+   */
+  rememberEvent(
+    observer,
+    event.id
+  );
 
   return null;
 }
 
 export function processPerceptions(
   world: WorldState,
-  events: string[]
+  events: WorldEvent[]
 ): PerceptionResult[] {
-  const results: PerceptionResult[] = [];
+  const results: PerceptionResult[] =
+    [];
 
-  /*
-   * Each event is processed once.
-   *
-   * A character can perceive an event, interpret it,
-   * and update their internal state.
-   */
-  for (const event of events) {
-    for (const observer of world.characters) {
-      if (!canObserve(observer, event)) {
+  for (
+    const event of events
+  ) {
+    for (
+      const observer of
+        world.characters
+    ) {
+      if (
+        !canObserve(
+          world,
+          observer,
+          event
+        )
+      ) {
         continue;
       }
 
-      const perception = interpretEvent(
-        world,
-        observer,
-        event
-      );
+      const perception =
+        interpretEvent(
+          world,
+          observer,
+          event
+        );
 
       if (!perception) {
         continue;
       }
 
-      const character = findCharacter(
-        world,
-        perception.characterId
-      );
+      const character =
+        findCharacter(
+          world,
+          perception.characterId
+        );
 
       if (!character) {
         continue;
       }
 
-      for (const knowledge of perception.knowledgeGained) {
-        addKnowledge(character, knowledge);
+      for (
+        const knowledge of
+          perception.knowledgeGained
+      ) {
+        addKnowledge(
+          character,
+          knowledge
+        );
       }
 
-      if (perception.emotionalChange) {
+      if (
+        perception.emotionalChange
+      ) {
         character.emotionalState =
           perception.emotionalChange;
       }
 
-      if (perception.priorityChange) {
+      if (
+        perception.priorityChange
+      ) {
         character.currentPriority =
           perception.priorityChange;
       }
 
-      for (const relationship of perception.relationshipChanges) {
+      for (
+        const relationship of
+          perception.relationshipChanges
+      ) {
         updateRelationship(
           character,
           relationship.targetId,
-          relationship.trustDelta ?? 0,
-          relationship.suspicionDelta ?? 0
+          relationship.trustDelta ??
+            0,
+          relationship.suspicionDelta ??
+            0
         );
       }
 
-      results.push(perception);
+      results.push(
+        perception
+      );
     }
   }
 
