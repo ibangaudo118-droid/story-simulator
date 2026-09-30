@@ -5,204 +5,136 @@ export type ActionType =
   | "TALK"
   | "INVESTIGATE"
   | "SEARCH"
-  | "WAIT";
+  | "WAIT"
 
-export type Relationship = {
-  targetId: string;
-  trust: number;
-  suspicion: number;
-};
+export type StrategyId =
+  | "direct-investigation"
+  | "social-contact"
+  | "surveillance"
+  | "observation"
+  | "exploration"
+  | "cautious-waiting"
 
-/**
- * Structured internal event.
- *
- * This is the simulation's source of truth.
- * Human-readable narration should be generated from this,
- * never the other way around.
- */
 export type WorldEventType =
   | "ACTION"
   | "CONSEQUENCE"
   | "PERCEPTION"
-  | "INTERVENTION";
+  | "INTERVENTION"
 
-export type WorldEvent = {
-  id: string;
-  type: WorldEventType;
+export interface Relationship {
+  targetId: string
+  trust: number
+  suspicion: number
+}
 
-  /**
-   * Simulation day on which the event occurred.
-   */
-  day: number;
+export interface WorldEvent {
+  id: string
+  type: WorldEventType
+  day: number
+  actorId?: string
+  targetId?: string
+  locationId?: string
+  data: Record<string, unknown>
+}
 
-  /**
-   * Character who caused the event.
-   */
-  actorId?: string;
+export interface MemoryEntry {
+  eventId: string
+  day: number
+  type: WorldEventType
+  sourceCharacterId?: string
+  targetCharacterId?: string
+  locationId?: string
+  importance: number
+  confidence: number
+  summary: string
+}
 
-  /**
-   * Character affected by the event.
-   */
-  targetId?: string;
+export interface ActionOutcome {
+  id: string
+  eventId: string
+  day: number
 
-  /**
-   * Location where the event occurred.
-   */
-  locationId?: string;
+  actorId: string
+  action: ActionType
+  targetId?: string
+  locationId: string
 
-  /**
-   * Machine-readable event information.
-   */
-  data: Record<string, unknown>;
-};
+  success: boolean
 
-/**
- * A character's memory of a specific world event.
- *
- * Memory is derived from perception.
- * It is NOT the source of truth for what actually happened.
- *
- * The canonical truth remains WorldEvent.
- */
-export type MemoryEntry = {
-  /**
-   * The exact world event this memory came from.
-   */
-  eventId: string;
+  progress: number
+  effectiveness: number
+  risk: number
 
-  /**
-   * Simulation day when the event occurred.
-   */
-  day: number;
+  newInformation: boolean
+  targetReacted: boolean
+  targetNoticed: boolean
 
-  /**
-   * Type of the original world event.
-   */
-  type: WorldEventType;
+  summary: string
+}
 
-  /**
-   * Character responsible for the event, when applicable.
-   */
-  sourceCharacterId?: string;
+export interface StrategyState {
+  id: StrategyId
+  label: string
 
-  /**
-   * Character affected by the event, when applicable.
-   */
-  targetCharacterId?: string;
+  effectiveness: number
 
-  /**
-   * Location where the event occurred, when applicable.
-   */
-  locationId?: string;
+  attempts: number
+  successes: number
+  failures: number
 
-  /**
-   * How important this memory is to the character.
-   */
-  importance: number;
+  lastUsedDay?: number
+}
 
-  /**
-   * How confident the character is that their memory
-   * accurately represents what they perceived.
-   */
-  confidence: number;
+export interface Character {
+  id: string
+  name: string
+  role: string
 
-  /**
-   * Human-readable interpretation of the event.
-   *
-   * This is derived information.
-   * It must never be used as canonical simulation state.
-   */
-  summary: string;
-};
+  goal: string
+  fear: string
+  secret: string
 
-export type Character = {
-  id: string;
-  name: string;
-  role: string;
+  knowledge: string[]
+  memories?: MemoryEntry[]
 
-  goal: string;
-  fear: string;
-  secret: string;
+  capabilities: string[]
+  resources: string[]
 
-  /**
-   * Legacy knowledge representation.
-   *
-   * Kept temporarily while the simulation transitions
-   * toward structured memory.
-   */
-  knowledge: string[];
+  location: string
 
-  /**
-   * Structured memories tied to specific world events.
-   */
-  memories?: MemoryEntry[];
+  emotionalState: string
+  currentPriority: string
 
-  capabilities: string[];
-  resources: string[];
+  relationships: Relationship[]
 
-  location: string;
+  actionHistory?: ActionOutcome[]
 
-  emotionalState: string;
-  currentPriority: string;
+  strategies?: StrategyState[]
+  currentStrategyId?: StrategyId
 
-  relationships: Relationship[];
+  recentActions?: ActionType[]
+  processedEventIds?: string[]
+}
 
-  /**
-   * Short-term action history used by the decision engine.
-   */
-  recentActions: ActionType[];
+export interface Location {
+  id: string
+  name: string
+  description: string
+  connectedTo: string[]
+}
 
-  /**
-   * Event IDs this character has already processed.
-   *
-   * This is deliberately separate from memories.
-   */
-  processedEventIds?: string[];
-};
+export interface WorldState {
+  day: number
+  location: string
+  situation: string
 
-export type Location = {
-  id: string;
-  name: string;
-  description: string;
-  connectedTo: string[];
-};
+  characters: Character[]
+  locations: Location[]
 
-export type WorldState = {
-  day: number;
+  entities: Record<string, unknown>
+  objects: Record<string, unknown>
+  evidence: string[]
 
-  /**
-   * Current global location/context.
-   */
-  location: string;
-
-  /**
-   * Current human-readable situation.
-   *
-   * Presentation state, not the simulation's source of truth.
-   */
-  situation: string;
-
-  characters: Character[];
-
-  locations: Location[];
-
-  entities: string[];
-  objects: string[];
-
-  /**
-   * Evidence discovered in the world.
-   */
-  evidence: string[];
-
-  /**
-   * Legacy/display timeline.
-   *
-   * Eventually this should be derived from eventLog.
-   */
-  events: string[];
-
-  /**
-   * Canonical simulation event history.
-   */
-  eventLog: WorldEvent[];
-};
+  events: string[]
+  eventLog: WorldEvent[]
+}
