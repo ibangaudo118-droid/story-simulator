@@ -1,5 +1,6 @@
 import type {
   Character,
+  MemoryEntry,
   WorldEvent,
   WorldState,
 } from "./types";
@@ -60,6 +61,63 @@ function addKnowledge(
   }
 }
 
+function addMemory(
+  character: Character,
+  event: WorldEvent,
+  summary: string,
+  importance = 50,
+  confidence = 100
+): void {
+  character.memories ??= [];
+
+  /*
+   * A character should not have duplicate memories
+   * for the same source event.
+   *
+   * Event identity is the source of truth.
+   */
+  const alreadyRemembered =
+    character.memories.some(
+      (memory) =>
+        memory.eventId === event.id
+    );
+
+  if (alreadyRemembered) {
+    return;
+  }
+
+  const memory: MemoryEntry = {
+    eventId: event.id,
+
+    day: event.day,
+
+    type: event.type,
+
+    sourceCharacterId:
+      event.actorId,
+
+    targetCharacterId:
+      event.targetId,
+
+    locationId:
+      event.locationId,
+
+    importance: clamp(
+      importance
+    ),
+
+    confidence: clamp(
+      confidence
+    ),
+
+    summary,
+  };
+
+  character.memories.push(
+    memory
+  );
+}
+
 function updateRelationship(
   character: Character,
   targetId: string,
@@ -94,13 +152,6 @@ function updateRelationship(
  *
  * IMPORTANT:
  * We use event identity, not the English interpretation.
- *
- * Therefore:
- *
- * FOLLOW event #12
- * FOLLOW event #18
- *
- * are two different events and can both affect a character.
  */
 function alreadyProcessed(
   character: Character,
@@ -133,8 +184,6 @@ function rememberEvent(
  * Determine whether an event can physically
  * reach the observer.
  *
- * This is intentionally conservative.
- *
  * Current visibility rules:
  *
  * 1. An actor can always process their own event.
@@ -143,15 +192,6 @@ function rememberEvent(
  * 3. An event with a target can be observed by that target
  *    when they are at the event location.
  * 4. Characters elsewhere cannot observe the event.
- *
- * Later we can add:
- * - private conversations
- * - line of sight
- * - distance
- * - sound
- * - hidden actions
- * - surveillance
- * - information passed by another character
  */
 function canObserve(
   world: WorldState,
@@ -225,10 +265,13 @@ function interpretEvent(
   }
 
   /*
-   * The actor does not need to "discover"
+   * The actor does not need to discover
    * their own action through perception.
    *
-   * Their action has already been applied.
+   * Their action has already happened.
+   *
+   * We still mark the event as processed,
+   * but we do not create a perception memory here.
    */
   if (
     event.actorId ===
@@ -273,9 +316,6 @@ function interpretEvent(
 
   /*
    * FOLLOW
-   *
-   * This is the first important actor/observer
-   * feedback loop.
    */
   if (
     action === "FOLLOW" &&
@@ -287,6 +327,17 @@ function interpretEvent(
       event.id
     );
 
+    const summary =
+      `${actor.name} appears to be following ${observer.name}.`;
+
+    addMemory(
+      observer,
+      event,
+      summary,
+      85,
+      100
+    );
+
     return {
       characterId:
         observer.id,
@@ -295,7 +346,7 @@ function interpretEvent(
         event.id,
 
       interpretation:
-        `${actor.name} appears to be following ${observer.name}.`,
+        summary,
 
       knowledgeGained: [
         `${actor.name} is actively monitoring ${observer.name}.`,
@@ -331,6 +382,19 @@ function interpretEvent(
       event.id
     );
 
+    const summary =
+      `${actor.name} is speaking with ${target.name}.`;
+
+    addMemory(
+      observer,
+      event,
+      summary,
+      target.id === observer.id
+        ? 70
+        : 35,
+      90
+    );
+
     return {
       characterId:
         observer.id,
@@ -339,7 +403,7 @@ function interpretEvent(
         event.id,
 
       interpretation:
-        `${actor.name} is speaking with ${target.name}.`,
+        summary,
 
       knowledgeGained: [
         `${actor.name} spoke with ${target.name}.`,
@@ -373,6 +437,17 @@ function interpretEvent(
       event.id
     );
 
+    const summary =
+      `${actor.name} moved from ${String(from)} to ${String(to)}.`;
+
+    addMemory(
+      observer,
+      event,
+      summary,
+      40,
+      100
+    );
+
     return {
       characterId:
         observer.id,
@@ -381,7 +456,7 @@ function interpretEvent(
         event.id,
 
       interpretation:
-        `${actor.name} moved from ${String(from)} to ${String(to)}.`,
+        summary,
 
       knowledgeGained: [
         `${actor.name} moved to ${String(to)}.`,
@@ -416,6 +491,17 @@ function interpretEvent(
     if (
       !evidenceFound
     ) {
+      const summary =
+        `${actor.name} investigated the situation but did not uncover new evidence.`;
+
+      addMemory(
+        observer,
+        event,
+        summary,
+        30,
+        95
+      );
+
       return {
         characterId:
           observer.id,
@@ -424,7 +510,7 @@ function interpretEvent(
           event.id,
 
         interpretation:
-          `${actor.name} investigated the situation but did not uncover new evidence.`,
+          summary,
 
         knowledgeGained: [],
 
@@ -438,6 +524,17 @@ function interpretEvent(
       };
     }
 
+    const summary =
+      `${actor.name} discovered new evidence while investigating.`;
+
+    addMemory(
+      observer,
+      event,
+      summary,
+      75,
+      95
+    );
+
     return {
       characterId:
         observer.id,
@@ -446,7 +543,7 @@ function interpretEvent(
         event.id,
 
       interpretation:
-        `${actor.name} discovered new evidence while investigating.`,
+        summary,
 
       knowledgeGained: [
         `${actor.name} discovered evidence connected to the company.`,
@@ -478,6 +575,17 @@ function interpretEvent(
       event.id
     );
 
+    const summary =
+      `${actor.name} searched the area.`;
+
+    addMemory(
+      observer,
+      event,
+      summary,
+      45,
+      90
+    );
+
     return {
       characterId:
         observer.id,
@@ -486,7 +594,7 @@ function interpretEvent(
         event.id,
 
       interpretation:
-        `${actor.name} searched the area.`,
+        summary,
 
       knowledgeGained:
         typeof knowledge ===
@@ -518,6 +626,17 @@ function interpretEvent(
       event.id
     );
 
+    const summary =
+      `${actor.name} is carefully observing the surroundings.`;
+
+    addMemory(
+      observer,
+      event,
+      summary,
+      25,
+      90
+    );
+
     return {
       characterId:
         observer.id,
@@ -526,7 +645,7 @@ function interpretEvent(
         event.id,
 
       interpretation:
-        `${actor.name} is carefully observing the surroundings.`,
+        summary,
 
       knowledgeGained: [],
 
@@ -552,6 +671,17 @@ function interpretEvent(
       event.id
     );
 
+    const summary =
+      `${actor.name} chose to wait.`;
+
+    addMemory(
+      observer,
+      event,
+      summary,
+      15,
+      95
+    );
+
     return {
       characterId:
         observer.id,
@@ -560,7 +690,7 @@ function interpretEvent(
         event.id,
 
       interpretation:
-        `${actor.name} chose to wait.`,
+        summary,
 
       knowledgeGained: [],
 
@@ -579,6 +709,9 @@ function interpretEvent(
    *
    * Mark it processed so the observer does not
    * repeatedly reconsider the same event.
+   *
+   * We intentionally do not create a memory because
+   * the engine does not yet know what the event means.
    */
   rememberEvent(
     observer,
@@ -633,6 +766,15 @@ export function processPerceptions(
         continue;
       }
 
+      /*
+       * Keep the legacy knowledge representation
+       * synchronized for compatibility.
+       *
+       * This is temporary.
+       *
+       * Later, knowledge will become a derived view
+       * of structured memories/beliefs.
+       */
       for (
         const knowledge of
           perception.knowledgeGained
@@ -678,4 +820,4 @@ export function processPerceptions(
   }
 
   return results;
-}
+  }
