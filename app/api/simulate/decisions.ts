@@ -116,16 +116,6 @@ function getMemorySignal(
       continue;
     }
 
-    /*
-     * Memory strength decays with the
-     * passage of simulation time.
-     *
-     * Day 0 = strongest
-     * Day 1 = slightly weaker
-     * Days 2-3 = moderately weaker
-     * Older memories = still relevant,
-     * but significantly weaker
-     */
     const age = Math.max(
       0,
       world.day - memory.day
@@ -172,7 +162,7 @@ export function getLegalActions(
   if (
     hasCapability(
       character,
-      "investigate"
+      "investigation"
     )
   ) {
     actions.push(
@@ -274,11 +264,6 @@ function scoreAction(
     case "WAIT":
       score += 10;
 
-      /*
-       * High self-preservation can make
-       * waiting attractive when the character
-       * feels threatened.
-       */
       score +=
         selfPreservation *
         0.12;
@@ -309,11 +294,6 @@ function scoreAction(
         goal *
         0.15;
 
-      /*
-       * Memories involving evidence,
-       * discovery or investigation create
-       * persistent pressure to investigate.
-       */
       score +=
         getMemorySignal(
           world,
@@ -371,10 +351,6 @@ function scoreAction(
           0.15;
       }
 
-      /*
-       * Talking becomes less attractive when
-       * memories indicate an immediate threat.
-       */
       score -=
         getMemorySignal(
           world,
@@ -411,11 +387,6 @@ function scoreAction(
           0.15;
       }
 
-      /*
-       * If memories indicate that someone
-       * is hiding something, following becomes
-       * more attractive.
-       */
       score +=
         getMemorySignal(
           world,
@@ -435,10 +406,6 @@ function scoreAction(
     case "MOVE":
       score += 15;
 
-      /*
-       * Movement can become attractive when
-       * self-preservation is strong.
-       */
       score +=
         selfPreservation *
         0.3;
@@ -447,10 +414,6 @@ function scoreAction(
         fear *
         0.15;
 
-      /*
-       * But characters strongly driven by
-       * curiosity may stay to investigate.
-       */
       score -=
         curiosity *
         0.15;
@@ -458,12 +421,6 @@ function scoreAction(
       break;
   }
 
-  /*
-   * Repetition penalty.
-   *
-   * A character should not mechanically choose
-   * the same action forever.
-   */
   if (
     recentlyDid(
       character,
@@ -473,10 +430,6 @@ function scoreAction(
     score -= 18;
   }
 
-  /*
-   * Strong threat memories can suppress
-   * passive behavior.
-   */
   const threatSignal =
     getMemorySignal(
       world,
