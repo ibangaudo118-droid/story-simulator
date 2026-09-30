@@ -3,7 +3,7 @@ import type {
   MemoryEntry,
   WorldEvent,
   WorldState,
-} from "./types";
+} from "@/lib/simulation/types";
 
 export type PerceptionResult = {
   characterId: string;
