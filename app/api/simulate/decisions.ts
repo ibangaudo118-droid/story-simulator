@@ -5,8 +5,9 @@ import type {
 } from "./types";
 
 import {
-  MindState,
   buildMindState,
+  type MindState,
+  type Motive,
 } from "./mind";
 
 export type Decision = {
@@ -15,31 +16,24 @@ export type Decision = {
   score: number;
 };
 
-/* =========================================================
-   HELPERS
-========================================================= */
-
 function hasCapability(
   character: Character,
   capability: string
-) {
+): boolean {
   return character.capabilities.some(
     (item) =>
-      item
-        .toLowerCase()
-        .includes(
-          capability.toLowerCase()
-        )
+      item.toLowerCase() ===
+      capability.toLowerCase()
   );
 }
 
 function recentlyDid(
   character: Character,
   action: ActionType
-) {
-  return character.recentActions.includes(
-    action
-  );
+): boolean {
+  return character.recentActions
+    .slice(-3)
+    .includes(action);
 }
 
 function getRelationship(
@@ -48,14 +42,15 @@ function getRelationship(
 ) {
   return character.relationships.find(
     (relationship) =>
-      relationship.targetId === targetId
+      relationship.targetId ===
+      targetId
   );
 }
 
 function sameLocation(
   first: Character,
   second: Character
-) {
+): boolean {
   return (
     first.location ===
     second.location
@@ -65,7 +60,7 @@ function sameLocation(
 function getNearbyCharacter(
   world: WorldState,
   character: Character
-) {
+): Character | undefined {
   return world.characters.find(
     (other) =>
       other.id !== character.id &&
@@ -78,39 +73,97 @@ function getNearbyCharacter(
 
 function getMotiveStrength(
   mind: MindState,
-  type: MotiveType
-) {
+  type: Motive["type"]
+): number {
   return mind.motives
     .filter(
       (motive) =>
         motive.type === type
     )
     .reduce(
-      (
-        strongest,
-        motive
-      ) =>
-        Math.max(
-          strongest,
-          motive.strength
-        ),
+      (total, motive) =>
+        total +
+        motive.strength,
       0
     );
 }
 
-type MotiveType =
-  | "GOAL"
-  | "FEAR"
-  | "CURIOSITY"
-  | "PROTECTION"
-  | "SELF_PRESERVATION"
-  | "LOYALTY";
+function getMemorySignal(
+  character: Character,
+  keywords: string[]
+): number {
+  const memories =
+    character.memories ?? [];
 
-/* =========================================================
-   LEGAL ACTIONS
-========================================================= */
+  let signal = 0;
 
-function getLegalActions(
+  for (
+    const memory of memories
+  ) {
+    const summary =
+      memory.summary.toLowerCase();
+
+    const matches =
+      keywords.filter(
+        (keyword) =>
+          summary.includes(
+            keyword
+          )
+      ).length;
+
+    if (matches === 0) {
+      continue;
+    }
+
+    /*
+     * More important and more recent
+     * memories should influence decisions
+     * more strongly.
+     */
+    const age =
+      Math.max(
+        0,
+        character.memories
+          ? Math.max(
+              0,
+              memory.day -
+                Math.max(
+                  ...memories.map(
+                    (item) =>
+                      item.day
+                  )
+                )
+            )
+          : 0
+      );
+
+    const recencyMultiplier =
+      age === 0
+        ? 1
+        : 0.75;
+
+    signal +=
+      memory.importance *
+      memory.confidence /
+      100 *
+      matches *
+      recencyMultiplier;
+  }
+
+  return Math.min(
+    100,
+    signal
+  );
+}
+
+/**
+ * Determine which actions are physically
+ * possible for the character.
+ *
+ * This function does not decide what the
+ * character wants to do.
+ */
+export function getLegalActions(
   world: WorldState,
   character: Character
 ): ActionType[] {
@@ -119,21 +172,10 @@ function getLegalActions(
     "OBSERVE",
   ];
 
-  const location =
-    world.locations.find(
-      (item) =>
-        item.id ===
-        character.location
-    );
-
-  /* -------------------------------------------------------
-     Investigation
-  ------------------------------------------------------- */
-
   if (
     hasCapability(
       character,
-      "investigation"
+      "investigate"
     )
   ) {
     actions.push(
@@ -142,28 +184,28 @@ function getLegalActions(
     );
   }
 
-  /* -------------------------------------------------------
-     Movement
-  ------------------------------------------------------- */
+  const hasConnectedLocation =
+    world.locations.some(
+      (location) =>
+        location.id ===
+          character.location &&
+        location.connectedTo
+          .length > 0
+    );
 
   if (
-    location?.connectedTo &&
-    location.connectedTo.length > 0
+    hasConnectedLocation
   ) {
     actions.push("MOVE");
   }
 
-  /* -------------------------------------------------------
-     Character interaction
-  ------------------------------------------------------- */
-
-  const nearbyCharacter =
+  const nearby =
     getNearbyCharacter(
       world,
       character
     );
 
-  if (nearbyCharacter) {
+  if (nearby) {
     actions.push(
       "TALK",
       "FOLLOW"
@@ -173,41 +215,49 @@ function getLegalActions(
   return actions;
 }
 
-/* =========================================================
-   SCORE ACTION
-========================================================= */
-
 function scoreAction(
   world: WorldState,
   character: Character,
-  mind: MindState,
-  action: ActionType
-): Decision {
-  let score = 0;
-
-  const reasons: string[] = [];
-
-  const nearbyCharacter =
+  action: ActionType,
+  mind: MindState
+): number {
+  const nearby =
     getNearbyCharacter(
       world,
       character
     );
 
-  const nearbyRelationship =
-    nearbyCharacter
+  const relationship =
+    nearby
       ? getRelationship(
           character,
-          nearbyCharacter.id
+          nearby.id
         )
       : undefined;
 
-  const suspicion =
-    nearbyRelationship?.suspicion ??
-    0;
+  const curiosity =
+    getMotiveStrength(
+      mind,
+      "CURIOSITY"
+    );
 
-  const trust =
-    nearbyRelationship?.trust ??
-    0;
+  const selfPreservation =
+    getMotiveStrength(
+      mind,
+      "SELF_PRESERVATION"
+    );
+
+  const protection =
+    getMotiveStrength(
+      mind,
+      "PROTECTION"
+    );
+
+  const loyalty =
+    getMotiveStrength(
+      mind,
+      "LOYALTY"
+    );
 
   const goal =
     getMotiveStrength(
@@ -221,454 +271,269 @@ function scoreAction(
       "FEAR"
     );
 
-  const curiosity =
-    getMotiveStrength(
-      mind,
-      "CURIOSITY"
-    );
+  let score = 0;
 
-  const protection =
-    getMotiveStrength(
-      mind,
-      "PROTECTION"
-    );
+  switch (action) {
+    case "WAIT":
+      score += 10;
 
-  const selfPreservation =
-    getMotiveStrength(
-      mind,
-      "SELF_PRESERVATION"
-    );
+      /*
+       * High self-preservation can make
+       * waiting attractive when the character
+       * feels threatened.
+       */
+      score +=
+        selfPreservation *
+        0.12;
 
-  const loyalty =
-    getMotiveStrength(
-      mind,
-      "LOYALTY"
-    );
+      break;
 
-  /* =======================================================
-     WAIT
-  ======================================================= */
-
-  if (action === "WAIT") {
-    score += 10;
-
-    reasons.push(
-      "Waiting avoids unnecessary risk."
-    );
-
-    score +=
-      selfPreservation * 0.08;
-
-    score +=
-      protection * 0.05;
-
-    score +=
-      fear * 0.05;
-  }
-
-  /* =======================================================
-     OBSERVE
-  ======================================================= */
-
-  if (action === "OBSERVE") {
-    score += 25;
-
-    reasons.push(
-      "Observing can reveal information without directly creating much risk."
-    );
-
-    score +=
-      curiosity * 0.25;
-
-    score +=
-      selfPreservation * 0.1;
-  }
-
-  /* =======================================================
-     INVESTIGATE
-  ======================================================= */
-
-  if (action === "INVESTIGATE") {
-    if (
-      hasCapability(
-        character,
-        "investigation"
-      )
-    ) {
-      score += 45;
-
-      reasons.push(
-        "The character has the capability to investigate."
-      );
-    }
-
-    score +=
-      goal * 0.45;
-
-    score +=
-      curiosity * 0.4;
-
-    if (
-      world.evidence.length === 0
-    ) {
+    case "OBSERVE":
       score += 15;
 
-      reasons.push(
-        "There is little concrete evidence, increasing the value of investigation."
-      );
-    } else {
-      score += 10;
+      score +=
+        curiosity *
+        0.35;
 
-      reasons.push(
-        "Existing evidence gives the investigation something to build on."
-      );
-    }
+      score +=
+        selfPreservation *
+        0.2;
 
-    score -=
-      selfPreservation * 0.15;
+      break;
 
-    score -=
-      fear * 0.1;
-  }
-
-  /* =======================================================
-     SEARCH
-  ======================================================= */
-
-  if (action === "SEARCH") {
-    if (
-      hasCapability(
-        character,
-        "investigation"
-      )
-    ) {
-      score += 35;
-    }
-
-    score +=
-      goal * 0.3;
-
-    score +=
-      curiosity * 0.4;
-
-    if (
-      world.evidence.length === 0
-    ) {
+    case "INVESTIGATE":
       score += 20;
 
-      reasons.push(
-        "Searching could produce the first useful clue."
-      );
-    } else {
-      score += 10;
+      score +=
+        curiosity *
+        0.75;
 
-      reasons.push(
-        "Searching could connect existing evidence to something new."
-      );
-    }
+      score +=
+        goal *
+        0.15;
 
-    score -=
-      selfPreservation * 0.1;
-  }
+      /*
+       * Memories involving evidence,
+       * discovery or investigation create
+       * persistent pressure to investigate.
+       */
+      score +=
+        getMemorySignal(
+          character,
+          [
+            "evidence",
+            "investigated",
+            "discovered",
+            "searched",
+          ]
+        ) *
+        0.35;
 
-  /* =======================================================
-     TALK
-  ======================================================= */
+      break;
 
-  if (action === "TALK") {
-    if (!nearbyCharacter) {
-      score = -Infinity;
+    case "SEARCH":
+      score += 15;
 
-      reasons.push(
-        "There is nobody nearby to talk to."
-      );
-    } else {
+      score +=
+        curiosity *
+        0.55;
+
+      score +=
+        getMemorySignal(
+          character,
+          [
+            "evidence",
+            "searched",
+            "discovered",
+          ]
+        ) *
+        0.3;
+
+      break;
+
+    case "TALK":
       score += 25;
 
       score +=
-        curiosity * 0.25;
+        loyalty *
+        0.35;
 
       score +=
-        trust * 0.25;
+        protection *
+        0.25;
 
-      score +=
-        loyalty * 0.2;
+      if (relationship) {
+        score +=
+          relationship.trust *
+          0.3;
+
+        score -=
+          relationship.suspicion *
+          0.15;
+      }
 
       /*
-       * Suspicion can make conversation more
-       * valuable because the character wants
-       * information or clarification.
-       */
-      score +=
-        suspicion * 0.35;
-
-      /*
-       * But high self-preservation can make
-       * direct conversation dangerous.
+       * Talking becomes less attractive when
+       * memories indicate an immediate threat.
        */
       score -=
-        selfPreservation * 0.15;
+        getMemorySignal(
+          character,
+          [
+            "following",
+            "monitoring",
+            "threat",
+            "danger",
+          ]
+        ) *
+        0.2;
 
-      if (suspicion >= 70) {
-        reasons.push(
-          `${nearbyCharacter.name}'s behaviour creates a strong reason to question them.`
-        );
-      } else if (trust >= 60) {
-        reasons.push(
-          `${nearbyCharacter.name} is trusted enough for conversation to be useful.`
-        );
-      } else {
-        reasons.push(
-          "Conversation may reveal information or change the relationship."
-        );
-      }
-    }
-  }
+      break;
 
-  /* =======================================================
-     FOLLOW
-  ======================================================= */
-
-  if (action === "FOLLOW") {
-    if (!nearbyCharacter) {
-      score = -Infinity;
-
-      reasons.push(
-        "There is nobody nearby to follow."
-      );
-    } else {
+    case "FOLLOW":
       score += 10;
 
-      /*
-       * Following becomes more attractive when
-       * suspicion or curiosity is high.
-       */
       score +=
-        suspicion * 0.75;
+        curiosity *
+        0.45;
 
       score +=
-        curiosity * 0.35;
+        goal *
+        0.15;
 
-      /*
-       * Trust reduces the need to secretly follow.
-       */
-      score -=
-        trust * 0.2;
+      if (relationship) {
+        score +=
+          relationship.suspicion *
+          0.7;
 
-      /*
-       * Fear and self-preservation discourage
-       * risky pursuit.
-       */
-      score -=
-        selfPreservation * 0.3;
-
-      score -=
-        fear * 0.15;
-
-      if (suspicion >= 70) {
-        reasons.push(
-          `${nearbyCharacter.name}'s behaviour gives the character a strong reason to keep watching them.`
-        );
-      } else if (suspicion >= 40) {
-        reasons.push(
-          `Following ${nearbyCharacter.name} could reduce uncertainty.`
-        );
-      } else {
-        reasons.push(
-          "There is not yet a strong reason to follow someone."
-        );
+        score -=
+          relationship.trust *
+          0.15;
       }
-    }
+
+      /*
+       * If memories indicate that someone
+       * is hiding something, following becomes
+       * more attractive.
+       */
+      score +=
+        getMemorySignal(
+          character,
+          [
+            "following",
+            "monitoring",
+            "hiding",
+            "suspicious",
+            "discovered",
+          ]
+        ) *
+        0.35;
+
+      break;
+
+    case "MOVE":
+      score += 15;
+
+      /*
+       * Movement can become attractive when
+       * self-preservation is strong.
+       */
+      score +=
+        selfPreservation *
+        0.3;
+
+      score +=
+        fear *
+        0.15;
+
+      /*
+       * But characters strongly driven by
+       * curiosity may stay to investigate.
+       */
+      score -=
+        curiosity *
+        0.15;
+
+      break;
   }
 
-  /* =======================================================
-     MOVE
-  ======================================================= */
-
-  if (action === "MOVE") {
-    score += 20;
-
-    reasons.push(
-      "Moving creates access to different people and information."
-    );
-
-    score +=
-      goal * 0.15;
-
-    score +=
-      curiosity * 0.15;
-
-    /*
-     * Movement can also become attractive when
-     * staying put feels unsafe.
-     */
-    score +=
-      selfPreservation * 0.15;
-
-    /*
-     * But fear can make movement less attractive
-     * when the destination is unknown.
-     */
-    score -=
-      fear * 0.1;
-  }
-
-  /* =======================================================
-     REPETITION PENALTY
-  ======================================================= */
-
+  /*
+   * Repetition penalty.
+   *
+   * A character should not mechanically choose
+   * the same action forever.
+   */
   if (
     recentlyDid(
       character,
       action
     )
   ) {
-    score -= 30;
-
-    reasons.push(
-      "The character recently performed this action, making repetition less attractive."
-    );
+    score -= 18;
   }
 
-  const recentCount =
-    character.recentActions.filter(
-      (recentAction) =>
-        recentAction === action
-    ).length;
-
-  if (recentCount >= 2) {
-    score -=
-      recentCount * 10;
-
-    reasons.push(
-      "Repeated behaviour is becoming less attractive."
+  /*
+   * Strong threat memories can suppress
+   * passive behavior.
+   */
+  const threatSignal =
+    getMemorySignal(
+      character,
+      [
+        "following",
+        "monitoring",
+        "danger",
+        "threat",
+        "caught",
+        "exposed",
+      ]
     );
-  }
-
-  /* =======================================================
-     MOTIVE EFFECTS
-  ======================================================= */
 
   if (
-    selfPreservation >= 80
+    threatSignal >= 50
   ) {
     if (
-      action === "FOLLOW" ||
-      action === "INVESTIGATE"
-    ) {
-      score -= 15;
-
-      reasons.push(
-        "Self-preservation makes risky actions less attractive."
-      );
-    }
-
-    if (
-      action === "OBSERVE" ||
       action === "WAIT"
     ) {
-      score += 10;
-
-      reasons.push(
-        "The character prefers safer ways of gathering information."
-      );
+      score -= 20;
     }
-  }
 
-  if (
-    protection >= 80
-  ) {
     if (
-      action === "WAIT" ||
-      action === "OBSERVE"
-    ) {
-      score += 8;
-
-      reasons.push(
-        "Protection encourages cautious behaviour."
-      );
-    }
-
-    if (action === "TALK") {
-      score += 5;
-
-      reasons.push(
-        "Protective motives can make direct communication useful."
-      );
-    }
-  }
-
-  if (
-    curiosity >= 70
-  ) {
-    if (
-      action === "INVESTIGATE" ||
-      action === "SEARCH" ||
       action === "OBSERVE"
     ) {
       score += 10;
-
-      reasons.push(
-        "Curiosity increases the value of gathering information."
-      );
-    }
-  }
-
-  if (
-    loyalty >= 70 &&
-    action === "TALK"
-  ) {
-    score += 5;
-
-    reasons.push(
-      "Loyalty encourages maintaining important relationships."
-    );
-  }
-
-  if (fear >= 80) {
-    if (
-      action === "FOLLOW" ||
-      action === "INVESTIGATE"
-    ) {
-      score -= 10;
-
-      reasons.push(
-        "Fear discourages actions that could expose the character to danger."
-      );
     }
 
     if (
-      action === "WAIT" ||
-      action === "OBSERVE"
+      action === "MOVE"
     ) {
-      score += 5;
+      score +=
+        selfPreservation *
+        0.2;
     }
   }
 
-  /* =======================================================
-     FINAL SCORE
-  ======================================================= */
-
-  if (score !== -Infinity) {
-    score = Math.round(score);
-  }
-
-  if (reasons.length === 0) {
-    reasons.push(
-      "The action is currently the most useful legal option."
-    );
-  }
-
-  return {
-    action,
-    reason: reasons.join(" "),
-    score,
-  };
+  return score;
 }
 
-/* =========================================================
-   CHOOSE ONE ACTION
-========================================================= */
+function getReason(
+  character: Character,
+  action: ActionType,
+  mind: MindState
+): string {
+  const strongestMotive =
+    [...mind.motives].sort(
+      (a, b) =>
+        b.strength -
+        a.strength
+    )[0];
+
+  if (!strongestMotive) {
+    return `${character.name} chose ${action}.`;
+  }
+
+  return `${character.name} chose ${action} because of ${strongestMotive.type.toLowerCase()}: ${strongestMotive.description}`;
+}
 
 export function chooseAction(
   world: WorldState,
@@ -686,38 +551,61 @@ export function chooseAction(
       character
     );
 
-  const decisions =
+  const scored =
     legalActions.map(
-      (action) =>
-        scoreAction(
+      (action) => ({
+        action,
+        score: scoreAction(
           world,
           character,
-          mind,
-          action
-        )
+          action,
+          mind
+        ),
+      })
     );
 
-  decisions.sort(
+  scored.sort(
     (a, b) =>
-      b.score - a.score
+      b.score -
+      a.score
   );
 
-  return decisions[0];
-}
+  const selected =
+    scored[0];
 
-/* =========================================================
-   CHOOSE ACTIONS FOR ALL CHARACTERS
-========================================================= */
+  return {
+    action:
+      selected.action,
+
+    reason:
+      getReason(
+        character,
+        selected.action,
+        mind
+      ),
+
+    score:
+      Math.round(
+        selected.score
+      ),
+  };
+}
 
 export function chooseActions(
   world: WorldState
-) {
+): Record<
+  string,
+  Decision
+> {
   const decisions: Record<
     string,
     Decision
   > = {};
 
-  for (const character of world.characters) {
+  for (
+    const character of
+      world.characters
+  ) {
     decisions[character.id] =
       chooseAction(
         world,
