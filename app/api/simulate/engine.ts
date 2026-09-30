@@ -45,10 +45,6 @@ export {
   type WorldState,
 };
 
-/**
- * Normalize worlds coming from older frontend state
- * or persisted simulation responses.
- */
 export function normalizeWorld(
   world: WorldState
 ): WorldState {
@@ -112,12 +108,6 @@ function rememberAction(
   ].slice(-5);
 }
 
-/**
- * Record a structured intervention event.
- *
- * The intervention is recorded as an event.
- * It does not directly force a character to act.
- */
 export function applyIntervention(
   world: WorldState,
   intervention: string
@@ -172,19 +162,57 @@ export function simulateDay(
     "characterUpdates"
   ] = {};
 
-  for (const character of world.characters) {
-    const decision = chooseAction(
-      world,
-      character
-    );
+  /*
+   * =========================================================
+   * PHASE 1 — DECISION
+   * =========================================================
+   *
+   * Every character decides from the SAME world state.
+   *
+   * No character's action has executed yet.
+   * Therefore Zara cannot accidentally influence
+   * Daniel's decision simply because Zara appears first
+   * in the characters array.
+   */
+  const decisions: Record<
+    string,
+    ReturnType<typeof chooseAction>
+  > = {};
 
-    const action = decision.action;
+  for (
+    const character of
+      world.characters
+  ) {
+    decisions[character.id] =
+      chooseAction(
+        world,
+        character
+      );
+  }
 
-    const consequence = executeAction(
-      world,
-      character,
-      action
-    );
+  /*
+   * =========================================================
+   * PHASE 2 — ACTION
+   * =========================================================
+   *
+   * Execute the decisions that were already made.
+   *
+   * Consequences can change the world, but they cannot
+   * change another character's decision for this tick.
+   */
+  for (
+    const character of
+      world.characters
+  ) {
+    const decision =
+      decisions[character.id];
+
+    const consequence =
+      executeAction(
+        world,
+        character,
+        decision.action
+      );
 
     applyConsequence(
       world,
@@ -197,7 +225,7 @@ export function simulateDay(
 
     rememberAction(
       character,
-      action
+      decision.action
     );
 
     consequences.push(
@@ -211,11 +239,25 @@ export function simulateDay(
     characterUpdates[
       character.id
     ] = {
-      action,
-      reason: decision.reason,
+      action:
+        decision.action,
+
+      reason:
+        decision.reason,
     };
   }
 
+  /*
+   * =========================================================
+   * PHASE 3 — PERCEPTION
+   * =========================================================
+   *
+   * Characters now process what happened.
+   *
+   * Perceptions are recorded as canonical WorldEvents.
+   * This keeps the eventLog as the causal history of the
+   * simulation instead of hiding perception in events[].
+   */
   const perceptionResults =
     processPerceptions(
       world,
@@ -227,14 +269,61 @@ export function simulateDay(
       perceptionResults
   ) {
     if (
-      perception.interpretation
+      !perception.interpretation
     ) {
-      world.events.push(
-        perception.interpretation
-      );
+      continue;
     }
+
+    const observer =
+      world.characters.find(
+        (character) =>
+          character.id ===
+          perception.characterId
+      );
+
+    const perceptionEvent:
+      WorldEvent = {
+        id:
+          "perception-" +
+          world.day +
+          "-" +
+          (world.eventLog.length + 1),
+
+        type:
+          "PERCEPTION",
+
+        day:
+          world.day,
+
+        actorId:
+          perception.characterId,
+
+        locationId:
+          observer?.location,
+
+        data: {
+          sourceEventId:
+            perception.sourceEventId,
+
+          interpretation:
+            perception.interpretation,
+        },
+      };
+
+    world.eventLog.push(
+      perceptionEvent
+    );
+
+    world.events.push(
+      perception.interpretation
+    );
   }
 
+  /*
+   * Legacy human-readable event list.
+   *
+   * The canonical source remains eventLog.
+   */
   world.events.push(
     ...events
   );
