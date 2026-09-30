@@ -118,6 +118,117 @@ function getRelationshipSummary(
 }
 
 /* =========================================================
+   EVENT LOG RENDERING
+========================================================= */
+
+function getEventDescription(
+  world: WorldState,
+  event: WorldState["eventLog"][number]
+): string {
+  const actor = event.actorId
+    ? world.characters.find(
+        character => character.id === event.actorId
+      )?.name || event.actorId
+    : null;
+
+  const target = event.targetId
+    ? world.characters.find(
+        character => character.id === event.targetId
+      )?.name || event.targetId
+    : null;
+
+  const action =
+    typeof event.data.action === "string"
+      ? event.data.action
+      : null;
+
+  switch (event.type) {
+    case "INTERVENTION":
+      return typeof event.data.instruction === "string"
+        ? `User intervention: ${event.data.instruction}`
+        : "User intervened in the world.";
+
+    case "ACTION":
+      switch (action) {
+        case "MOVE": {
+          const to =
+            typeof event.data.to === "string"
+              ? getLocationName(
+                  world,
+                  event.data.to
+                )
+              : null;
+
+          return actor && to
+            ? `${actor} moves to ${to}.`
+            : actor
+              ? `${actor} moves.`
+              : "A character moves.";
+        }
+
+        case "TALK":
+          return actor && target
+            ? `${actor} talks with ${target}.`
+            : actor
+              ? `${actor} attempts to talk.`
+              : "A character attempts to talk.";
+
+        case "FOLLOW":
+          return actor && target
+            ? `${actor} follows ${target}.`
+            : actor
+              ? `${actor} attempts to follow someone.`
+              : "A character attempts to follow someone.";
+
+        case "INVESTIGATE":
+          return actor
+            ? `${actor} investigates the situation.`
+            : "A character investigates the situation.";
+
+        case "SEARCH":
+          return actor
+            ? `${actor} searches the area.`
+            : "A character searches the area.";
+
+        case "OBSERVE":
+          return actor
+            ? `${actor} observes what is happening.`
+            : "A character observes what is happening.";
+
+        case "WAIT":
+          return actor
+            ? `${actor} waits and watches.`
+            : "A character waits and watches.";
+
+        case "PRIVATE_MEETING_END":
+          return actor
+            ? `${actor} leaves a private meeting with the company.`
+            : "A private meeting with the company ends.";
+
+        default:
+          return actor
+            ? `${actor} performs ${action || "an action"}.`
+            : "A character takes an action.";
+      }
+
+    case "CONSEQUENCE":
+      return actor
+        ? `A consequence affects ${actor}.`
+        : "A consequence occurs.";
+
+    case "PERCEPTION":
+      return actor
+        ? target
+          ? `${actor} perceives something involving ${target}.`
+          : `${actor} perceives something in the world.`
+        : "A character perceives something.";
+
+    default:
+      return "An event occurs in the world.";
+  }
+}
+
+/* =========================================================
    PAGE
 ========================================================= */
 
@@ -134,6 +245,7 @@ export default function Home() {
    * This prevents the UI and simulation engine
    * from starting from different realities.
    */
+
   const [world, setWorld] =
     useState<WorldState>(
       () => createInitialWorld()
@@ -247,6 +359,7 @@ export default function Home() {
        *   ↓
        * Day N+1 request sends that state
        */
+
       setWorld(
         simulationData.world
       );
@@ -256,6 +369,7 @@ export default function Home() {
       );
 
       setIntervention("");
+
     } catch (err) {
       console.error(
         "Simulation request failed:",
@@ -267,6 +381,7 @@ export default function Home() {
           ? err.message
           : "Simulation failed. Please try again."
       );
+
     } finally {
       setLoading(false);
     }
@@ -294,6 +409,7 @@ export default function Home() {
      * so simulation state from the previous run
      * does not leak into the reset state.
      */
+
     setWorld(
       createInitialWorld()
     );
@@ -309,6 +425,7 @@ export default function Home() {
 
   return (
     <main className="page">
+
       <div className="shell">
 
         {/* =================================================
@@ -344,6 +461,7 @@ export default function Home() {
           <div className="world-meta">
 
             <div>
+
               <span>
                 DAY
               </span>
@@ -351,6 +469,7 @@ export default function Home() {
               <strong>
                 {world.day}
               </strong>
+
             </div>
 
 
@@ -419,51 +538,66 @@ export default function Home() {
 
 
                   <small>
+
                     <strong>
                       Location:
                     </strong>{" "}
+
                     {getLocationName(
                       world,
                       character.location
                     )}
+
                   </small>
 
 
                   <small>
+
                     <strong>
                       Priority:
                     </strong>{" "}
+
                     {character.currentPriority}
+
                   </small>
 
 
                   <small>
+
                     <strong>
                       Emotion:
                     </strong>{" "}
+
                     {character.emotionalState}
+
                   </small>
 
 
                   <small>
+
                     <strong>
                       Relationship:
                     </strong>{" "}
+
                     {getRelationshipSummary(
                       character
                     )}
+
                   </small>
 
 
                   <small>
+
                     <strong>
                       Recent actions:
                     </strong>{" "}
+
                     {character.recentActions.length
                       ? character.recentActions.join(
                           " → "
                         )
                       : "None yet"}
+
                   </small>
 
                 </article>
@@ -554,7 +688,7 @@ export default function Home() {
 
           <div className="timeline">
 
-            {world.events.length === 0 ? (
+            {world.eventLog.length === 0 ? (
 
               <p>
                 No events have occurred yet.
@@ -562,21 +696,32 @@ export default function Home() {
 
             ) : (
 
-              world.events.map(
+              world.eventLog.map(
                 (event, index) => (
 
                   <article
                     className="event"
-                    key={`${event}-${index}`}
+                    key={event.id}
                   >
 
                     <span className="event-number">
                       {index + 1}
                     </span>
 
-                    <p>
-                      {event}
-                    </p>
+                    <div>
+
+                      <small>
+                        DAY {event.day} · {event.type}
+                      </small>
+
+                      <p>
+                        {getEventDescription(
+                          world,
+                          event
+                        )}
+                      </p>
+
+                    </div>
 
                   </article>
 
@@ -672,10 +817,13 @@ export default function Home() {
                       {character.reason && (
 
                         <small>
+
                           <strong>
                             Reason:
                           </strong>{" "}
+
                           {character.reason}
+
                         </small>
 
                       )}
@@ -684,10 +832,13 @@ export default function Home() {
                       {character.new_knowledge && (
 
                         <small>
+
                           <strong>
                             New knowledge:
                           </strong>{" "}
+
                           {character.new_knowledge}
+
                         </small>
 
                       )}
@@ -696,10 +847,13 @@ export default function Home() {
                       {character.relationship_change && (
 
                         <small>
+
                           <strong>
                             Relationship:
                           </strong>{" "}
+
                           {character.relationship_change}
+
                         </small>
 
                       )}
@@ -708,10 +862,13 @@ export default function Home() {
                       {character.emotional_change && (
 
                         <small>
+
                           <strong>
                             Emotional state:
                           </strong>{" "}
+
                           {character.emotional_change}
+
                         </small>
 
                       )}
@@ -720,10 +877,13 @@ export default function Home() {
                       {character.new_priority && (
 
                         <small>
+
                           <strong>
                             New priority:
                           </strong>{" "}
+
                           {character.new_priority}
+
                         </small>
 
                       )}
@@ -818,6 +978,7 @@ export default function Home() {
         </section>
 
       </div>
+
     </main>
   );
 }
