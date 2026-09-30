@@ -71,10 +71,11 @@ function addMemory(
   character.memories ??= [];
 
   /*
-   * A character should not have duplicate memories
-   * for the same source event.
+   * A character can only have one memory
+   * originating from the same world event.
    *
-   * Event identity is the source of truth.
+   * WorldEvent.id is the identity of the
+   * underlying occurrence.
    */
   const alreadyRemembered =
     character.memories.some(
@@ -147,11 +148,12 @@ function updateRelationship(
 }
 
 /**
- * Check whether a character has already processed
- * this exact simulation event.
+ * Check whether this exact world event has
+ * already been processed by the observer.
  *
- * IMPORTANT:
- * We use event identity, not the English interpretation.
+ * Event identity is used instead of natural-language
+ * descriptions so two different events with similar
+ * wording are never accidentally treated as duplicates.
  */
 function alreadyProcessed(
   character: Character,
@@ -181,23 +183,28 @@ function rememberEvent(
 }
 
 /**
- * Determine whether an event can physically
- * reach the observer.
+ * Determine whether an observer could have
+ * physically perceived an event.
  *
- * Current visibility rules:
+ * observerLocation represents the observer's
+ * location at the moment the event occurred.
  *
- * 1. An actor can always process their own event.
- * 2. A character at the same location can potentially
- *    observe an ordinary action.
- * 3. An event with a target can be observed by that target
- *    when they are at the event location.
- * 4. Characters elsewhere cannot observe the event.
+ * This is deliberately passed into the function
+ * rather than always reading observer.location,
+ * because a character may have moved later in
+ * the same simulation tick.
  */
 function canObserve(
   world: WorldState,
   observer: Character,
-  event: WorldEvent
+  event: WorldEvent,
+  observerLocation?: string
 ): boolean {
+  /*
+   * The actor always knows that they performed
+   * their own action. However, the actor is handled
+   * separately by interpretEvent().
+   */
   if (
     event.actorId ===
     observer.id
@@ -205,22 +212,36 @@ function canObserve(
     return true;
   }
 
-  if (
-    !event.locationId
-  ) {
+  /*
+   * Events without a physical location cannot
+   * currently be observed through ordinary
+   * location-based perception.
+   */
+  if (!event.locationId) {
     return false;
   }
 
+  /*
+   * Use the observer's location at event time.
+   *
+   * Falling back to the current location keeps
+   * the function safe for callers that do not
+   * provide historical location information.
+   */
+  const locationAtEvent =
+    observerLocation ??
+    observer.location;
+
   if (
-    observer.location !==
+    locationAtEvent !==
     event.locationId
   ) {
     return false;
   }
 
   /*
-   * If this event directly targets the observer,
-   * they are eligible to notice it.
+   * A directly targeted observer can perceive
+   * the event when they are physically present.
    */
   if (
     event.targetId ===
@@ -230,8 +251,9 @@ function canObserve(
   }
 
   /*
-   * Ordinary actions occurring at the same
-   * location are observable for now.
+   * Current prototype rule:
+   * ordinary actions at the same location
+   * are potentially observable.
    */
   return true;
 }
@@ -253,7 +275,8 @@ function getTarget(
 function interpretEvent(
   world: WorldState,
   observer: Character,
-  event: WorldEvent
+  event: WorldEvent,
+  observerLocation?: string
 ): PerceptionResult | null {
   if (
     alreadyProcessed(
@@ -265,13 +288,13 @@ function interpretEvent(
   }
 
   /*
-   * The actor does not need to discover
+   * The actor does not need to rediscover
    * their own action through perception.
    *
-   * Their action has already happened.
+   * The action already happened directly.
    *
-   * We still mark the event as processed,
-   * but we do not create a perception memory here.
+   * We still mark the event as processed so
+   * it cannot be reconsidered repeatedly.
    */
   if (
     event.actorId ===
@@ -282,6 +305,25 @@ function interpretEvent(
       event.id
     );
 
+    return null;
+  }
+
+  /*
+   * Do not allow an observer to process an event
+   * unless the observer could physically perceive it.
+   *
+   * This check is kept here as a second defensive
+   * boundary even though processPerceptions() also
+   * checks canObserve().
+   */
+  if (
+    !canObserve(
+      world,
+      observer,
+      event,
+      observerLocation
+    )
+  ) {
     return null;
   }
 
@@ -302,6 +344,11 @@ function interpretEvent(
   const action =
     event.data.action;
 
+  /*
+   * Events that do not represent a known
+   * action are marked processed but are not
+   * converted into invented memories.
+   */
   if (
     typeof action !==
     "string"
@@ -705,13 +752,11 @@ function interpretEvent(
   }
 
   /*
-   * Unknown event/action.
+   * Unknown action:
    *
-   * Mark it processed so the observer does not
-   * repeatedly reconsider the same event.
-   *
-   * We intentionally do not create a memory because
-   * the engine does not yet know what the event means.
+   * Mark the event as processed so it does
+   * not remain permanently pending, but do not
+   * invent an interpretation.
    */
   rememberEvent(
     observer,
@@ -723,23 +768,34 @@ function interpretEvent(
 
 export function processPerceptions(
   world: WorldState,
-  events: WorldEvent[]
+  events: WorldEvent[],
+  observerLocations: Record<
+    string,
+    string
+  > = {}
 ): PerceptionResult[] {
   const results: PerceptionResult[] =
     [];
 
   for (
-    const event of events
+    const event of
+      events
   ) {
     for (
       const observer of
         world.characters
     ) {
+      const observerLocation =
+        observerLocations[
+          observer.id
+        ];
+
       if (
         !canObserve(
           world,
           observer,
-          event
+          event,
+          observerLocation
         )
       ) {
         continue;
@@ -749,7 +805,8 @@ export function processPerceptions(
         interpretEvent(
           world,
           observer,
-          event
+          event,
+          observerLocation
         );
 
       if (!perception) {
@@ -768,12 +825,8 @@ export function processPerceptions(
 
       /*
        * Keep the legacy knowledge representation
-       * synchronized for compatibility.
-       *
-       * This is temporary.
-       *
-       * Later, knowledge will become a derived view
-       * of structured memories/beliefs.
+       * synchronized while the architecture transitions
+       * toward structured memories and beliefs.
        */
       for (
         const knowledge of
@@ -820,4 +873,4 @@ export function processPerceptions(
   }
 
   return results;
-  }
+}
