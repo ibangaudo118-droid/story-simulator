@@ -2,60 +2,20 @@
 
 import { useState } from "react";
 
+import {
+  createInitialWorld,
+} from "@/lib/simulation/world";
+
+import type {
+  ActionType,
+  Character,
+  Relationship,
+  WorldState,
+} from "@/lib/simulation/types";
+
 /* =========================================================
    TYPES
 ========================================================= */
-
-type ActionType =
-  | "OBSERVE"
-  | "MOVE"
-  | "FOLLOW"
-  | "TALK"
-  | "INVESTIGATE"
-  | "SEARCH"
-  | "WAIT";
-
-type Relationship = {
-  targetId: string;
-  trust: number;
-  suspicion: number;
-};
-
-type Character = {
-  id: string;
-  name: string;
-  role: string;
-  goal: string;
-  fear: string;
-  secret: string;
-  knowledge: string[];
-  capabilities: string[];
-  resources: string[];
-  location: string;
-  emotionalState: string;
-  currentPriority: string;
-  relationships: Relationship[];
-  recentActions: ActionType[];
-};
-
-type Location = {
-  id: string;
-  name: string;
-  description: string;
-  connectedTo: string[];
-};
-
-type WorldState = {
-  day: number;
-  location: string;
-  situation: string;
-  characters: Character[];
-  locations: Location[];
-  entities: string[];
-  objects: string[];
-  evidence: string[];
-  events: string[];
-};
 
 type CharacterUpdate = {
   name: string;
@@ -82,177 +42,6 @@ type SimulationResult = {
 };
 
 /* =========================================================
-   CANONICAL INITIAL WORLD
-========================================================= */
-
-const initialWorld: WorldState = {
-  day: 1,
-
-  location: "University of Lagos",
-
-  situation:
-    "A mysterious technology company has started secretly recruiting students on campus.",
-
-  locations: [
-    {
-      id: "campus",
-      name: "University of Lagos Campus",
-      description:
-        "The main university grounds where students move between classes and social spaces.",
-      connectedTo: ["campus-cafe", "company-office"]
-    },
-
-    {
-      id: "campus-cafe",
-      name: "Campus Café",
-      description:
-        "A busy café where students meet, talk and study.",
-      connectedTo: ["campus", "company-office"]
-    },
-
-    {
-      id: "company-office",
-      name: "Company Liaison Office",
-      description:
-        "A small private office where company representatives meet selected students.",
-      connectedTo: ["campus", "campus-cafe"]
-    }
-  ],
-
-  characters: [
-    {
-      id: "zara",
-      name: "Zara",
-      role: "Student investigator",
-
-      goal:
-        "Discover what the company is doing and whether students are being harmed.",
-
-      fear:
-        "The company discovers that she is investigating them.",
-
-      secret:
-        "Zara has already collected evidence about the company.",
-
-      knowledge: [
-        "The company has been approaching students privately.",
-        "Some students who were recruited have stopped talking to their friends."
-      ],
-
-      /*
-       * IMPORTANT:
-       * These are the exact machine-readable capabilities
-       * expected by the backend decision engine.
-       */
-      capabilities: [
-        "observation",
-        "investigation",
-        "smartphone",
-        "student contacts"
-      ],
-
-      resources: [
-        "smartphone",
-        "student ID",
-        "laptop",
-        "student contacts"
-      ],
-
-      location: "campus",
-
-      emotionalState:
-        "Suspicious but determined",
-
-      currentPriority:
-        "Find more evidence",
-
-      relationships: [
-        {
-          targetId: "daniel",
-          trust: 45,
-          suspicion: 55
-        }
-      ],
-
-      /*
-       * This is what prevents the engine from
-       * forgetting what Zara did yesterday.
-       */
-      recentActions: []
-    },
-
-    {
-      id: "daniel",
-      name: "Daniel",
-      role: "Student and company contact",
-
-      goal:
-        "Protect his family while maintaining financial success.",
-
-      fear:
-        "The company harms his family if he disobeys them.",
-
-      secret:
-        "The company offered Daniel ₦5 million to identify student investigators.",
-
-      knowledge: [
-        "The company knows Zara has been investigating.",
-        "The company wants Daniel to identify suspicious students."
-      ],
-
-      capabilities: [
-        "persuasion",
-        "hide emotions",
-        "student contacts",
-        "company communication"
-      ],
-
-      resources: [
-        "smartphone",
-        "student ID",
-        "company contact",
-        "student contacts"
-      ],
-
-      location: "campus",
-
-      emotionalState:
-        "Conflicted and afraid",
-
-      currentPriority:
-        "Protect his family without betraying Zara",
-
-      relationships: [
-        {
-          targetId: "zara",
-          trust: 60,
-          suspicion: 40
-        }
-      ],
-
-      recentActions: []
-    }
-  ],
-
-  entities: [
-    "Mysterious technology company",
-    "University of Lagos"
-  ],
-
-  objects: [
-    "student smartphones",
-    "student identification cards",
-    "laptops"
-  ],
-
-  evidence: [],
-
-  events: [
-    "Zara notices Daniel leaving a private meeting with the mysterious company."
-  ]
-};
-
-/* =========================================================
    VALIDATION
 ========================================================= */
 
@@ -274,7 +63,8 @@ function isValidWorld(
     Array.isArray(world.entities) &&
     Array.isArray(world.objects) &&
     Array.isArray(world.evidence) &&
-    Array.isArray(world.events)
+    Array.isArray(world.events) &&
+    Array.isArray(world.eventLog)
   );
 }
 
@@ -321,7 +111,7 @@ function getRelationshipSummary(
 
   return character.relationships
     .map(
-      relationship =>
+      (relationship: Relationship) =>
         `Trust ${relationship.trust}% · Suspicion ${relationship.suspicion}%`
     )
     .join(" · ");
@@ -332,8 +122,22 @@ function getRelationshipSummary(
 ========================================================= */
 
 export default function Home() {
+  /*
+   * IMPORTANT:
+   *
+   * The frontend no longer owns its own initialWorld.
+   *
+   * The canonical simulation world comes from:
+   *
+   * lib/simulation/world.ts
+   *
+   * This prevents the UI and simulation engine
+   * from starting from different realities.
+   */
   const [world, setWorld] =
-    useState<WorldState>(initialWorld);
+    useState<WorldState>(
+      () => createInitialWorld()
+    );
 
   const [result, setResult] =
     useState<SimulationResult | null>(null);
@@ -368,13 +172,13 @@ export default function Home() {
           method: "POST",
 
           headers: {
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
           },
 
           body: JSON.stringify({
             world,
-            intervention: interventionValue
-          })
+            intervention: interventionValue,
+          }),
         }
       );
 
@@ -428,22 +232,20 @@ export default function Home() {
       }
 
       /*
-       * This is critical.
+       * Replace the frontend state with the exact
+       * world returned by the simulation engine.
        *
-       * We replace the frontend's world with the
-       * backend's updated canonical world.
+       * This preserves simulation continuity:
        *
-       * Therefore:
-       *
-       * Day 1
+       * Day N
        *   ↓
-       * Backend changes world
+       * Engine changes world
        *   ↓
-       * Frontend stores new world
+       * Frontend receives world
        *   ↓
-       * Day 2 request sends that exact world
+       * Frontend stores world
        *   ↓
-       * Backend sees recentActions/evidence/etc.
+       * Day N+1 request sends that state
        */
       setWorld(
         simulationData.world
@@ -486,11 +288,14 @@ export default function Home() {
     }
 
     /*
-     * Fresh copy so future state changes never
-     * accidentally mutate the initial object.
+     * Create a completely fresh canonical world.
+     *
+     * createInitialWorld() returns a new object,
+     * so simulation state from the previous run
+     * does not leak into the reset state.
      */
     setWorld(
-      structuredClone(initialWorld)
+      createInitialWorld()
     );
 
     setResult(null);
