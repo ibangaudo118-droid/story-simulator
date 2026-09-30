@@ -2,7 +2,7 @@ import type {
   Character,
   MemoryEntry,
   WorldState,
-} from "./types";
+} from "@/lib/simulation/types";
 
 export type Belief = {
   subject: string;
