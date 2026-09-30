@@ -52,18 +52,77 @@ export type WorldEvent = {
 
   /**
    * Machine-readable event information.
-   *
-   * Examples:
-   * {
-   *   action: "FOLLOW"
-   * }
-   *
-   * {
-   *   trustDelta: -5,
-   *   suspicionDelta: 10
-   * }
    */
   data: Record<string, unknown>;
+};
+
+/**
+ * A character's memory of a specific world event.
+ *
+ * Memory is derived from perception.
+ * It is NOT the source of truth for what actually happened.
+ *
+ * The canonical truth remains WorldEvent.
+ *
+ * This allows us to distinguish:
+ *
+ * - what actually happened
+ * - what a character perceived
+ * - what the character remembers
+ * - how confident they are about that memory
+ */
+export type MemoryEntry = {
+  /**
+   * The exact world event this memory came from.
+   */
+  eventId: string;
+
+  /**
+   * Simulation day when the event occurred.
+   */
+  day: number;
+
+  /**
+   * Type of the original world event.
+   */
+  type: WorldEventType;
+
+  /**
+   * Character responsible for the event, when applicable.
+   */
+  sourceCharacterId?: string;
+
+  /**
+   * Character affected by the event, when applicable.
+   */
+  targetCharacterId?: string;
+
+  /**
+   * Location where the event occurred, when applicable.
+   */
+  locationId?: string;
+
+  /**
+   * How important this memory is to the character.
+   *
+   * Higher importance means it should be more resistant
+   * to future memory pruning or decay.
+   */
+  importance: number;
+
+  /**
+   * How confident the character is that their memory
+   * accurately represents what they perceived.
+   */
+  confidence: number;
+
+  /**
+   * Human-readable interpretation of the event.
+   *
+   * This is derived information.
+   * It must never be used as the canonical simulation state.
+   */
+  summary: string;
 };
 
 export type Character = {
@@ -75,7 +134,23 @@ export type Character = {
   fear: string;
   secret: string;
 
+  /**
+   * Legacy knowledge representation.
+   *
+   * Kept temporarily for compatibility while the simulation
+   * transitions to structured memory.
+   *
+   * This should eventually become a derived view of memory
+   * rather than primary character state.
+   */
   knowledge: string[];
+
+  /**
+   * Structured memories tied to specific world events.
+   *
+   * This becomes the primary foundation for character memory.
+   */
+  memories?: MemoryEntry[];
 
   capabilities: string[];
   resources: string[];
@@ -95,10 +170,14 @@ export type Character = {
   /**
    * Event IDs this character has already processed.
    *
-   * Important:
-   * We track event identity rather than the English interpretation
-   * of an event. This allows the same type of event to affect a
-   * character differently when it happens again.
+   * IMPORTANT:
+   * processedEventIds and memories are different concepts.
+   *
+   * processedEventIds answers:
+   * "Has this character already perceived/processed this event?"
+   *
+   * memories answers:
+   * "What does this character retain from events?"
    */
   processedEventIds?: string[];
 };
