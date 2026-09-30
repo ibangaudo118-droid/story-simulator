@@ -2,7 +2,7 @@ import type {
   ActionType,
   Character,
   WorldState,
-} from "./types";
+} from "@/lib/simulation/types";
 
 import {
   buildMindState,
