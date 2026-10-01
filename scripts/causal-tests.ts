@@ -1,0 +1,259 @@
+/**
+ * Causal tests: does a change in one character's STATE propagate through decisions into
+ * other characters' state?   npx tsx scripts/causal-tests.ts
+ *
+ * Two kinds of result:
+ *   PASS / FAIL   regressions. A FAIL makes the script exit 1.
+ *   KNOWN         documented design gaps. Printed, never fatal. When one starts passing it prints
+ *                 "FIXED" so you know to promote it to a normal check.
+ */
+import { createWorld } from "../lib/world/content";
+import { candidates, run, step } from "../lib/world/engine";
+import { announce, ensureActivityFact, learn, membersOf, poolConf } from "../lib/world/ops";
+import { stateHash } from "../lib/world/metrics";
+import { createTimeline, fork, worldAt, compareBranches } from "../lib/replay/timeline";
+import type { ActionType, Id, LogEntry, World } from "../lib/world/types";
+
+let failures = 0;
+function check(name: string, ok: boolean, detail = ""): void {
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${ok || !detail ? "" : "  -> " + detail}`);
+  if (!ok) failures++;
+}
+function known(name: string, ok: boolean, detail = ""): void {
+  console.log(`${ok ? "FIXED" : "KNOWN"} ${name}${detail ? "  -> " + detail : ""}`);
+}
+const SEEDS = Array.from({ length: 30 }, (_, i) => i + 1);
+
+/** The action a character chose on the next step, read from the log. */
+function actionsOf(next: World, prev: World, charId: Id): LogEntry[] {
+  return next.log.slice(prev.log.length).filter((e) => e.kind === "ACTION" && e.actorId === charId);
+}
+const util = (w: World, charId: Id, type: ActionType, target?: Id): number | undefined =>
+  candidates(w, w.characters[charId]).find((c) => c.type === type && (!target || c.target === target))?.util;
+const tell = (w: World, charId: Id, factId: Id, confidence = 95, from?: Id): World => {
+  const c = structuredClone(w);
+  learn(c, charId, factId, confidence, "told", from);
+  return c;
+};
+
+/* ================================================================== */
+console.log("--- Chain 1: Zara learns Daniel is the informant ---");
+{
+  const base = createWorld(1);
+  const told = tell(base, "zara", "daniel.is_informant", 95, "tobi");
+  const rb = base.characters.zara.relationships.daniel;
+  const rt = told.characters.zara.relationships.daniel;
+
+  // Link 1: belief -> relationship
+  check("belief lowers Zara's trust in Daniel", rt.trust < rb.trust, `${rb.trust} -> ${rt.trust}`);
+  check("belief raises Zara's suspicion of Daniel", rt.suspicion > rb.suspicion, `${rb.suspicion} -> ${rt.suspicion}`);
+
+  // Link 2: relationship -> candidate utilities
+  const cb = util(base, "zara", "CONFRONT", "daniel") ?? -Infinity;
+  const ct = util(told, "zara", "CONFRONT", "daniel") ?? -Infinity;
+  const tb = util(base, "zara", "TALK", "daniel") ?? -Infinity;
+  const tt = util(told, "zara", "TALK", "daniel") ?? -Infinity;
+  check("CONFRONT utility toward Daniel rises", ct > cb, `${cb.toFixed(1)} -> ${ct.toFixed(1)}`);
+  check("TALK utility toward Daniel falls", tt < tb, `${tb.toFixed(1)} -> ${tt.toFixed(1)}`);
+
+  // Link 3: utilities -> chosen behaviour (statistical, across seeds)
+  let confrontBase = 0;
+  let confrontTold = 0;
+  for (const s of SEEDS) {
+    const b = createWorld(s);
+    const t = tell(b, "zara", "daniel.is_informant", 95, "tobi");
+    const pick = (w: World) =>
+      actionsOf(step(w), w, "zara").some((e) => (e.data as any)?.action === "CONFRONT" && e.targetId === "daniel");
+    if (pick(b)) confrontBase++;
+    if (pick(t)) confrontTold++;
+  }
+  check(
+    "knowing the truth makes Zara confront Daniel more often on day 1",
+    confrontTold > confrontBase,
+    `${confrontBase}/${SEEDS.length} -> ${confrontTold}/${SEEDS.length} seeds`
+  );
+}
+
+/* ---- Link 4: behaviour -> another character's state; Link 5: that state changes THEIR decisions ---- */
+{
+  let confronts = 0;
+  let danielRelChanged = 0;
+  let utilChanged = 0;
+  for (const s of SEEDS) {
+    for (let day = 0; day < 15; day++) {
+      const w0 = run(createWorld(s), day);
+      const w1 = step(w0);
+      const hit = w1.log.slice(w0.log.length).find(
+        (e) => e.kind === "ACTION" && (e.data as any)?.action === "CONFRONT" && e.actorId === "zara" && e.targetId === "daniel"
+      );
+      if (!hit) continue;
+      confronts++;
+      const before = w0.characters.daniel.relationships.zara;
+      const after = w1.characters.daniel.relationships.zara;
+      // end-of-day decay alone moves suspicion by 0.3, so require a change a confrontation would cause
+      const moved = Math.abs(after.trust - before.trust) >= 2 || Math.abs(after.suspicion - before.suspicion) >= 3;
+      if (moved) danielRelChanged++;
+
+      // ceteris paribus: same world, only Daniel's view of Zara reset to pre-confrontation values
+      const a = structuredClone(w1);
+      const b = structuredClone(w1);
+      for (const w of [a, b]) {
+        w.characters.daniel.location = "campus";
+        w.characters.zara.location = "campus";
+      }
+      b.characters.daniel.relationships.zara = { ...before };
+      const ua = util(a, "daniel", "TALK", "zara");
+      const ub = util(b, "daniel", "TALK", "zara");
+      if (moved && ua !== ub) utilChanged++;
+      break;
+    }
+  }
+  check("Zara's confrontations occur in the sample", confronts >= 10, `${confronts} of ${SEEDS.length} seeds`);
+  check("a confrontation changes how Daniel sees Zara", danielRelChanged === confronts, `${danielRelChanged}/${confronts}`);
+  check("that changed view changes Daniel's own candidate utilities", utilChanged === confronts, `${utilChanged}/${confronts}`);
+}
+
+/* ---- End to end: an intervention changes later behaviour, not just the injected fact ---- */
+{
+  const FORK_DAY = 4;
+  const HORIZON = 20;
+  let behaviourChanged = 0;
+  let within5 = 0;
+  for (const s of SEEDS) {
+    let tl = createTimeline(s, HORIZON);
+    tl = fork(tl, "main", FORK_DAY, [{ kind: "LEARN", charId: "zara", factId: "daniel.is_informant", confidence: 95, fromId: "tobi" }], "told");
+    const { changedDays } = compareBranches(tl, "main", "told");
+    if (changedDays.length > 0) behaviourChanged++;
+    if (changedDays.some((d) => d <= FORK_DAY + 5)) within5++;
+  }
+  const pct = (n: number) => `${n}/${SEEDS.length}`;
+  check("telling Zara changes later ACTIONS in most seeds (intervention event itself excluded)", behaviourChanged >= SEEDS.length * 0.75, pct(behaviourChanged));
+  check("...and within 5 days in at least half of seeds", within5 >= SEEDS.length * 0.5, pct(within5));
+}
+
+/* ================================================================== */
+console.log("\n--- Chain 2: recruitment ---");
+{
+  // Put the recruiter and a recruitable student together and let TALK run until someone joins.
+  let joined: { seed: number; w: World; id: Id } | undefined;
+  for (const s of SEEDS) {
+    let w = createWorld(s);
+    w.flags.eligibleStudents = 20;
+    for (let d = 0; d < 30 && !joined; d++) {
+      w.characters.okafor.location = "campus";
+      w.characters.femi.location = "campus";
+      const prevMembers = membersOf(w, "company").map((c) => c.id);
+      const next = step(w);
+      const added = membersOf(next, "company").map((c) => c.id).filter((id) => !prevMembers.includes(id));
+      const named = next.log.slice(w.log.length).some((e) => /is recruited into/.test(e.text));
+      if (named && added.length === 1) joined = { seed: s, w: next, id: added[0] };
+      w = next;
+    }
+    if (joined) break;
+  }
+  check("a recruitment through TALK can happen", !!joined);
+  if (joined) {
+    const { w, id } = joined;
+    const c = w.characters[id];
+    check("the recruited character is a real company member", c.orgIds.includes("company"));
+    check("the company holds leverage over them", (w.orgs.company.leverage[id] ?? 0) > 0, String(w.orgs.company.leverage[id]));
+    // Behavioural check: plant strong suspicion of the member in the company's pool and let it act.
+    {
+      const planted = structuredClone(w);
+      const fid = ensureActivityFact(planted, id);
+      planted.orgs.company.pool[fid] = { factId: fid, confidence: 90, source: "witnessed", day: planted.day, corroboration: 1 };
+      let targeted = 0;
+      let cur = planted;
+      for (let d = 0; d < 10; d++) {
+        const before = cur.log.length;
+        const next = step(cur);
+        cur = next;
+        targeted += next.log
+          .slice(before)
+          .filter((e) => e.kind === "ORG_ACTION" && e.text.includes(c.name) && /watches|leans on|whispers against/.test(e.text)).length;
+        if (targeted) break;
+      }
+      check("the company does not surveil, pressure or smear its own member", targeted === 0, `${targeted} actions`);
+    }
+
+    // They can now be used by the company: REPORT becomes a real option once they hold something hostile.
+    const informed = structuredClone(w);
+    const target = id === "femi" ? "zara" : "femi";
+    const fact = ensureActivityFact(informed, target);
+    learn(informed, id, fact, 90, "witnessed");
+    check("a recruited member who learns something hostile gains a REPORT option", util(informed, id, "REPORT") !== undefined);
+    check("...and a non-member in the same situation does not", (() => {
+      const outsider = structuredClone(w);
+      const f2 = ensureActivityFact(outsider, target);
+      learn(outsider, "amara", f2, 90, "witnessed");
+      return util(outsider, "amara", "REPORT") === undefined;
+    })());
+    check("members move freely in company space (no detection risk)", (() => {
+      const w2 = structuredClone(w);
+      w2.characters[id].location = "company-office";
+      const s = util(w2, id, "SEARCH");
+      return s === undefined || s > -5;
+    })());
+  }
+}
+
+console.log("");
+{
+  // Known gap: the company's own RECRUIT action only moves counters.
+  let orgRecruitDays = 0;
+  let withNamedMember = 0;
+  for (const s of SEEDS.slice(0, 15)) {
+    const w = run(createWorld(s), 40);
+    for (const e of w.log) {
+      if (e.kind !== "ORG_ACTION" || (e.data as any)?.action !== "RECRUIT") continue;
+      orgRecruitDays++;
+      if (w.log.some((x) => x.day === e.day && /is recruited into/.test(x.text))) withNamedMember++;
+    }
+  }
+  known(
+    "company RECRUIT actions add a named character to the company",
+    orgRecruitDays > 0 && withNamedMember / orgRecruitDays >= 0.5,
+    `${withNamedMember}/${orgRecruitDays} RECRUIT days had a named recruit`
+  );
+}
+
+/* ================================================================== */
+console.log("\n--- Chain 3: information channels ---");
+{
+  const w = createWorld(1);
+  announce(w, "students.isolated", 25, 45, "rumor");
+  const aware = Object.values(w.characters).filter((c) => (c.beliefs["students.isolated"]?.confidence ?? 0) > 0);
+  known(
+    "a modest rumour does not reach every character instantly",
+    aware.length < Object.keys(w.characters).length,
+    `${aware.length}/${Object.keys(w.characters).length} characters believed it immediately`
+  );
+}
+
+/* ================================================================== */
+console.log("\n--- Regressions ---");
+{
+  let consecutive = 0;
+  let perRun = 0;
+  for (const s of SEEDS) {
+    const w = run(createWorld(s), 40);
+    const days: Record<string, number[]> = {};
+    for (const e of w.log) {
+      if (e.kind === "ACTION" && (e.data as any)?.action === "CONFRONT") {
+        (days[[e.actorId, e.targetId].join(">")] ??= []).push(e.day);
+      }
+    }
+    for (const list of Object.values(days)) {
+      perRun += list.length;
+      for (let i = 1; i < list.length; i++) if (list[i] - list[i - 1] <= 1) consecutive++;
+    }
+  }
+  check("the same character never confronts the same target on consecutive days", consecutive === 0, `${consecutive} cases`);
+  check("confrontation volume stays reasonable (<12 per 40-day run)", perRun / SEEDS.length < 12, (perRun / SEEDS.length).toFixed(1));
+}
+
+if (failures > 0) {
+  console.log(`\n${failures} causal check(s) FAILED`);
+  process.exit(1);
+}
+console.log("\nAll causal checks passed (KNOWN items are documented gaps, not failures).");
