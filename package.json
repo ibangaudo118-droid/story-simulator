@@ -1,0 +1,29 @@
+{
+  "name": "story-simulator",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test:replay": "tsx scripts/replay-tests.ts",
+    "test:narrator": "tsx scripts/narrator-tests.ts",
+    "test:invariants": "tsx scripts/world-invariants.ts",
+    "test:causal": "tsx scripts/causal-tests.ts",
+    "test": "npm run test:replay && npm run test:narrator && npm run test:invariants && npm run test:causal"
+  },
+  "dependencies": {
+    "groq-sdk": "^0.37.0",
+    "next": "^15.5.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "^5.7.0"
+  }
+}
